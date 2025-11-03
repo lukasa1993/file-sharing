@@ -17,8 +17,8 @@ export type UploadShare = {
   kind: 'upload'
   createdAt: Date
   expiresAt?: Date
-  maxFiles?: number
-  uploadedCount: number
+  maxBytes?: number
+  uploadedBytes: number
 }
 
 export type ShareRecord = DownloadShare | UploadShare
@@ -29,7 +29,10 @@ type PersistedShare = {
   createdAt: string
   expiresAt?: string | null
   fileKeys?: string[]
+  maxBytes?: number
+  maxUploads?: number
   maxFiles?: number
+  uploadedBytes?: number
   uploadedCount?: number
 }
 
@@ -64,7 +67,7 @@ export async function createDownloadShare(
 
 export async function createUploadShare(options?: {
   expiresInMinutes?: number
-  maxFiles?: number
+  maxBytes?: number
 }) {
   let token = randomToken()
   let record: UploadShare = {
@@ -72,8 +75,8 @@ export async function createUploadShare(options?: {
     kind: 'upload',
     createdAt: new Date(),
     expiresAt: resolveExpiry(options?.expiresInMinutes),
-    maxFiles: options?.maxFiles,
-    uploadedCount: 0,
+    maxBytes: options?.maxBytes,
+    uploadedBytes: 0,
   }
 
   shares.set(token, record)
@@ -138,15 +141,19 @@ export async function removeFileFromShares(fileKey: string) {
   }
 }
 
-export async function registerUpload(token: string, count = 1) {
+export async function registerUpload(token: string, bytes: number) {
   let record = shares.get(token)
   if (!record || record.kind !== 'upload') {
     throw new Error('Upload share not found')
   }
 
-  record.uploadedCount += count
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    throw new Error('Invalid upload byte count')
+  }
 
-  if (record.maxFiles != null && record.uploadedCount >= record.maxFiles) {
+  record.uploadedBytes += bytes
+
+  if (record.maxBytes != null && record.maxBytes > 0 && record.uploadedBytes >= record.maxBytes) {
     shares.delete(token)
   } else {
     shares.set(token, record)
@@ -183,8 +190,8 @@ async function loadSharesFromDisk() {
           kind: 'upload',
           createdAt: new Date(record.createdAt),
           expiresAt: record.expiresAt ? new Date(record.expiresAt) : undefined,
-          maxFiles: record.maxFiles,
-          uploadedCount: record.uploadedCount ?? 0,
+          maxBytes: record.maxBytes ?? undefined,
+          uploadedBytes: record.uploadedBytes ?? 0,
         })
       }
     }
@@ -210,8 +217,8 @@ async function persistShares() {
         kind: 'upload',
         createdAt: record.createdAt.toISOString(),
         expiresAt: record.expiresAt ? record.expiresAt.toISOString() : null,
-        maxFiles: record.maxFiles,
-        uploadedCount: record.uploadedCount,
+        maxBytes: record.maxBytes,
+        uploadedBytes: record.uploadedBytes,
       })
     }
   }

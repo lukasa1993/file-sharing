@@ -6,7 +6,7 @@ import {
   revokeShareToken,
 } from '../../models/admin.server.ts'
 import { readContextFormData } from '../../utils/form-data.ts'
-import { parsePositiveInteger } from '../../utils/numbers.ts'
+import { parseByteLimit, parsePositiveInteger } from '../../utils/numbers.ts'
 import { requireAdminSession } from '../auth/admin.tsx'
 import { redirectToDashboard } from './redirects.ts'
 
@@ -43,11 +43,11 @@ export async function adminCreateUploadShare(context: RequestContext<'POST'>) {
 
   let formData = await readContextFormData(context)
   let expiresIn = parsePositiveInteger(formData.get('expiresIn'))
-  let maxFiles = parsePositiveInteger(formData.get('maxFiles'))
+  let maxBytes = parseByteLimit(formData.get('maxSizeValue'), formData.get('maxSizeUnit'))
 
   let share = await createUploadShareLink({
     expiresInMinutes: expiresIn,
-    maxFiles: maxFiles ?? undefined,
+    maxBytes: maxBytes && maxBytes > 0 ? maxBytes : undefined,
   })
 
   return redirectToDashboard(context.request, {

@@ -7,6 +7,17 @@ import {
   sectionTitleClass,
 } from '../ui.ts'
 
+const byteUnitOptions = [
+  { value: 'mb', label: 'MB (×1024²)' },
+  { value: 'gb', label: 'GB (×1024³)' },
+  { value: 'kb', label: 'KB (×1024)' },
+  { value: 'b', label: 'Bytes' },
+  { value: 'tb', label: 'TB (×1024⁴)' },
+] as const
+
+const inlineFieldClass =
+  'rounded-xl border border-slate-700/70 bg-slate-900/50 px-3 py-2 text-sm text-slate-100 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/60'
+
 export function RequestUploadsSection() {
   return (
     <section className={`${cardClass} flex h-full flex-col gap-6`}>
@@ -27,8 +38,27 @@ export function RequestUploadsSection() {
           <input type="number" name="expiresIn" min="5" step="5" className={inputClass} />
         </label>
         <label className="block text-sm font-medium text-slate-200">
-          Max files
-          <input type="number" name="maxFiles" min="1" step="1" className={inputClass} />
+          Max total size (leave blank for unlimited)
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="number"
+              name="maxSizeValue"
+              min="0"
+              step="0.01"
+              placeholder="0"
+              className={`${inlineFieldClass} flex-1 min-w-0`}
+            />
+            <select name="maxSizeUnit" className={`${inlineFieldClass} mt-0 w-28 shrink-0`}>
+              {byteUnitOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            Examples: 50 MB, 1.5 GB. Use 0 or leave blank for unlimited.
+          </p>
         </label>
         <button type="submit" className={primaryButtonClass}>
           Generate upload link

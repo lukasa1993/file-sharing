@@ -42,7 +42,7 @@ export async function createDownloadShareLink(
 
 export async function createUploadShareLink(options?: {
   expiresInMinutes?: number
-  maxFiles?: number
+  maxBytes?: number
 }) {
   return createUploadShareLinkInternal(options)
 }
@@ -51,8 +51,8 @@ export async function revokeShareToken(token: string) {
   await revokeShareTokenInternal(token)
 }
 
-export async function registerUploadForToken(token: string, count: number) {
-  await registerUploadForTokenInternal(token, count)
+export async function registerUploadForToken(token: string, bytes: number) {
+  await registerUploadForTokenInternal(token, bytes)
 }
 
 export function getPublicFileUrl(key: string) {

@@ -25,7 +25,7 @@ export async function createDownloadShareLink(
 
 export async function createUploadShareLink(options?: {
   expiresInMinutes?: number
-  maxFiles?: number
+  maxBytes?: number
 }) {
   return createUploadShare(options)
 }
@@ -34,8 +34,8 @@ export async function revokeShareToken(token: string) {
   await removeShare(token)
 }
 
-export async function registerUploadForToken(token: string, count: number) {
-  await registerUpload(token, count)
+export async function registerUploadForToken(token: string, bytes: number) {
+  await registerUpload(token, bytes)
 }
 
 export function findShare(token: string) {

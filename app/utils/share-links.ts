@@ -1,5 +1,6 @@
 import { routes } from '../../routes.ts'
 import type { DownloadShare, ShareRecord, UploadShare } from './share-store.ts'
+import { formatBytes } from './format.ts'
 
 export function buildShareUrl(origin: string, share: ShareRecord) {
   if (share.kind === 'download') {
@@ -10,13 +11,12 @@ export function buildShareUrl(origin: string, share: ShareRecord) {
 }
 
 export function summarizeUploadShare(share: UploadShare) {
-  if (share.maxFiles == null) {
-    let uploads = share.uploadedCount
-    return `${uploads} upload${uploads === 1 ? '' : 's'} so far`
+  if (share.maxBytes == null || share.maxBytes <= 0) {
+    return `${formatBytes(share.uploadedBytes)} received (unlimited)`
   }
 
-  let remaining = Math.max(share.maxFiles - share.uploadedCount, 0)
-  return `${share.uploadedCount}/${share.maxFiles} uploads used - ${remaining} remaining`
+  let remaining = Math.max(share.maxBytes - share.uploadedBytes, 0)
+  return `${formatBytes(share.uploadedBytes)} of ${formatBytes(share.maxBytes)} used - ${formatBytes(remaining)} remaining`
 }
 
 export function buildDownloadUrl(base: URL, share: DownloadShare, key: string) {

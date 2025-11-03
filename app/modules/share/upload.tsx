@@ -1,3 +1,5 @@
+import type { RequestContext } from '@remix-run/fetch-router'
+
 import {
   findShare,
   registerUploadForToken,
@@ -10,6 +12,8 @@ import { routes } from '../../../routes.ts'
 import { UploadSharePage } from '../../components/share/UploadSharePage.tsx'
 import { redirectWithSearch } from '../../utils/redirect.ts'
 import { shareUnavailable, uploadShareCompleted } from './responses.tsx'
+import { formatBytes } from '../../utils/format.ts'
+import { readContextFormData } from '../../utils/form-data.ts'
 
 export function handleUploadShareView({ token, request }: { token: string; request: Request }) {
   let share = findShare(token)
@@ -36,26 +40,29 @@ export function handleUploadShareView({ token, request }: { token: string; reque
 
 export async function handleUploadShareAction({
   token,
-  request,
+  context,
 }: {
   token: string
-  request: Request
+  context: RequestContext<'POST', { token: string }>
 }) {
+  let request = context.request
   let share = findShare(token)
 
   if (!share || share.kind !== 'upload') {
     return shareUnavailable('Upload share not found or expired.')
   }
 
-  let formData = await request.clone().formData()
+  let formData = await readContextFormData(context)
   let files = formData.getAll('files').filter((value): value is File => value instanceof File)
 
   if (files.length === 0) {
     return redirectToUploadShare(request, token, { error: 'Select one or more files to send.' })
   }
 
-  if (share.maxFiles != null) {
-    let remaining = share.maxFiles - share.uploadedCount
+  let totalBytes = files.reduce((total, file) => total + file.size, 0)
+
+  if (share.maxBytes != null && share.maxBytes > 0) {
+    let remaining = share.maxBytes - share.uploadedBytes
     if (remaining <= 0) {
       await revokeShareToken(token)
       return redirectToUploadShare(request, token, {
@@ -63,25 +70,25 @@ export async function handleUploadShareAction({
       })
     }
 
-    if (files.length > remaining) {
+    if (totalBytes > remaining) {
       return redirectToUploadShare(request, token, {
-        error: `Only ${remaining} upload${remaining === 1 ? '' : 's'} remaining for this link.`,
+        error: `Only ${formatBytes(remaining)} remaining for this link.`,
       })
     }
   }
 
   await Promise.all(files.map((file) => saveFile(file, { prefix: `share/${token}` })))
-  await registerUploadForToken(token, files.length)
+  await registerUploadForToken(token, totalBytes)
 
   let updatedShare = findShare(token)
   if (!updatedShare || updatedShare.kind !== 'upload') {
     return uploadShareCompleted(
-      `Uploaded ${files.length} file${files.length === 1 ? '' : 's'}. This link has now reached its limit and is closed.`,
+      `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} (${formatBytes(totalBytes)}). This link has now reached its limit and is closed.`,
     )
   }
 
   return redirectToUploadShare(request, token, {
-    message: `Uploaded ${files.length} file${files.length === 1 ? '' : 's'}.`,
+    message: `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} (${formatBytes(totalBytes)}).`,
   })
 }
 

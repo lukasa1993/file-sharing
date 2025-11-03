@@ -20,7 +20,7 @@ export let routes = route({
   share: {
     download: '/share/download/:token',
     upload: route('/share/upload/:token', {
-      index: '/',
+      index: { method: 'GET', pattern: '/' },
       action: { method: 'POST', pattern: '/' },
     }),
   },

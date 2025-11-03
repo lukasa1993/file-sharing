@@ -16,7 +16,7 @@ export let uploadShareHandlers: RouteHandlers<typeof routes.share.upload> = {
     return handleUploadShareView({ token: params.token, request })
   },
 
-  async action({ params, request }) {
-    return handleUploadShareAction({ token: params.token, request })
+  async action(context) {
+    return handleUploadShareAction({ token: context.params.token, context })
   },
 }
