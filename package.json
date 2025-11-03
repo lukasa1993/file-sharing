@@ -1,0 +1,27 @@
+{
+  "name": "file-managment",
+  "type": "module",
+  "dependencies": {
+    "@remix-run/dom": "jam",
+    "@remix-run/events": "jam",
+    "@remix-run/fetch-router": "0.8.0",
+    "@remix-run/file-storage": "0.10.0",
+    "@remix-run/headers": "0.14.0",
+    "@remix-run/lazy-file": "3.6.0"
+  },
+  "scripts": {
+    "dev": "bun run --watch server.ts",
+    "start": "bun run server.ts",
+    "daemon": "pm2 start pm2.config.cjs",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"app/**/**\""
+  },
+  "devDependencies": {
+    "pm2": "6.0.13",
+    "@types/node": "24.10.0",
+    "eslint": "9.33.0",
+    "prettier": "3.3.3",
+    "bun-types": "1.3.1"
+  }
+}
