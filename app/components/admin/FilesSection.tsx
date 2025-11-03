@@ -112,10 +112,6 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
         </div>
 
         <div className="flex flex-col gap-2 text-xs text-slate-400 md:flex-row md:items-center md:justify-between">
-          <p>
-            Check items to include them in your selection. Click folder names to browse—the current
-            selection travels with you automatically.
-          </p>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="submit"
