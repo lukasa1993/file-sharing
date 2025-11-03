@@ -7,14 +7,16 @@ type DocumentProps = {
 
 export function Document({ title = 'File Sharing Demo', children }: DocumentProps) {
   return (
-    <html lang="en">
+    <html lang="en" className="h-full">
       <head>
         <meta charSet="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
         <title>{title}</title>
       </head>
-      <body>{children}</body>
+      <body className="min-h-full bg-slate-950 text-slate-100 antialiased selection:bg-sky-500/30 selection:text-white">
+        {children}
+      </body>
     </html>
   )
 }

@@ -29,15 +29,26 @@ export function AdminDashboardPage({
 }: AdminDashboardPageProps) {
   return (
     <Layout user={user}>
-      <h2>Admin Console</h2>
-      <p>Upload files, create download shares, or request uploads from collaborators.</p>
+      <header className="space-y-3">
+        <h2 className="text-3xl font-semibold tracking-tight text-white">Admin Console</h2>
+        <p className="max-w-2xl text-base leading-relaxed text-slate-300">
+          Upload assets, curate secure download links, or invite collaborators to send files without
+          granting full access.
+        </p>
+      </header>
 
-      {message ? <FlashMessage message={message} /> : null}
-      {error ? <FlashMessage message={error} /> : null}
+      <div className="space-y-3">
+        {message ? <FlashMessage message={message} /> : null}
+        {error ? <FlashMessage message={error} /> : null}
+      </div>
 
-      <UploadSection />
+      <div className="grid gap-8 lg:grid-cols-2">
+        <UploadSection />
+        <RequestUploadsSection />
+      </div>
+
       <FilesSection files={files} />
-      <RequestUploadsSection />
+
       <ShareListSection shares={shares} highlightToken={highlightToken} baseUrl={baseUrl} />
     </Layout>
   )

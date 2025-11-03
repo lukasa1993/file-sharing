@@ -1,3 +1,11 @@
+import {
+  cardClass,
+  inputClass,
+  primaryButtonClass,
+  sectionDescriptionClass,
+  sectionTitleClass,
+} from '../ui.ts'
+
 type LoginFormProps = {
   actionUrl: string
   error?: string
@@ -5,24 +13,36 @@ type LoginFormProps = {
 
 export function LoginForm({ actionUrl, error }: LoginFormProps) {
   return (
-    <section>
-      <h2>Sign in</h2>
-      <p>Use the admin credentials configured in your environment variables.</p>
-      {error ? <p>{error}</p> : null}
-      <form method="POST" action={actionUrl}>
-        <p>
-          <label>
-            Username:
-            <input name="username" type="text" required autoComplete="username" />
-          </label>
+    <section className={`${cardClass} mx-auto w-full max-w-md space-y-6`}>
+      <header>
+        <h2 className={`${sectionTitleClass} text-2xl`}>Sign in</h2>
+        <p className={sectionDescriptionClass}>
+          Use the admin credentials configured in your environment variables to access the console.
         </p>
-        <p>
-          <label>
-            Password:
-            <input name="password" type="password" required autoComplete="current-password" />
-          </label>
+      </header>
+      {error ? (
+        <p className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-100">
+          {error}
         </p>
-        <button type="submit">Sign in</button>
+      ) : null}
+      <form method="POST" action={actionUrl} className="space-y-4">
+        <label className="block text-sm font-medium text-slate-200">
+          Username
+          <input name="username" type="text" required autoComplete="username" className={inputClass} />
+        </label>
+        <label className="block text-sm font-medium text-slate-200">
+          Password
+          <input
+            name="password"
+            type="password"
+            required
+            autoComplete="current-password"
+            className={inputClass}
+          />
+        </label>
+        <button type="submit" className={`${primaryButtonClass} w-full justify-center`}>
+          Sign in
+        </button>
       </form>
     </section>
   )
