@@ -83,7 +83,7 @@ export async function adminCreateDirectory(context: RequestContext<'POST'>) {
 
   let formData = await readContextFormData(context)
   let nameField = formData.get('name')
-  let pathField = formData.get('path')
+  let pathField = formData.get('path') ?? formData.get('currentPath')
 
   let currentPath = typeof pathField === 'string' ? pathField : ''
 
@@ -168,7 +168,7 @@ export async function adminMoveEntries(context: RequestContext<'POST'>) {
 
   let formData = await readContextFormData(context)
   let entries = formData
-    .getAll('entries')
+    .getAll('selection')
     .map((value) => (typeof value === 'string' ? value.trim() : ''))
     .filter((value) => value.length > 0)
   let normalizedEntries = Array.from(
@@ -188,7 +188,7 @@ export async function adminMoveEntries(context: RequestContext<'POST'>) {
     ),
   )
   let destinationField = formData.get('destination')
-  let pathField = formData.get('path')
+  let pathField = formData.get('path') ?? formData.get('currentPath')
 
   let currentPath = typeof pathField === 'string' ? pathField : ''
   let destinationPath = typeof destinationField === 'string' ? destinationField.trim() : ''

@@ -16,5 +16,6 @@ export function redirectToDashboard(request: Request, options: DashboardRedirect
       share: options.share,
       path: options.path,
     },
+    hash: 'files',
   })
 }

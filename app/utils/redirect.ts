@@ -1,6 +1,7 @@
 type RedirectOptions = {
   status?: number
   params?: Record<string, string | undefined>
+  hash?: string
 }
 
 export function redirectWithSearch(request: Request, to: string, options: RedirectOptions = {}) {
@@ -11,6 +12,9 @@ export function redirectWithSearch(request: Request, to: string, options: Redire
         location.searchParams.set(key, value)
       }
     }
+  }
+  if (options.hash) {
+    location.hash = options.hash
   }
 
   let status = options.status ?? 303

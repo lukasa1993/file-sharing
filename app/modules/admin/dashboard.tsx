@@ -14,6 +14,15 @@ export async function adminDashboard(context: RequestContext) {
   let highlightToken = context.url.searchParams.get('share') ?? undefined
   let path = context.url.searchParams.get('path') ?? undefined
 
+  let selectedEntries = Array.from(
+    new Set(
+      context.url.searchParams
+        .getAll('selection')
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0),
+    ),
+  )
+
   let { directory, shares } = await getDashboardData(path)
 
   return render(
@@ -26,6 +35,7 @@ export async function adminDashboard(context: RequestContext) {
       highlightToken={highlightToken}
       currentPath={directory.path}
       baseUrl={context.request.url}
+      selectedEntries={selectedEntries}
     />,
   )
 }

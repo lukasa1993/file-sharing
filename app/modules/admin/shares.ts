@@ -16,41 +16,45 @@ export async function adminCreateDownloadShare(context: RequestContext<'POST'>) 
   if (session instanceof Response) return session
 
   let formData = await readContextFormData(context)
-  let pathField = formData.get('path')
+  let pathField = formData.get('path') ?? formData.get('currentPath')
   let currentPath = typeof pathField === 'string' ? pathField : ''
 
   let selectionValues = formData
-    .getAll('entries')
+    .getAll('selection')
     .map((value) => (typeof value === 'string' ? value : ''))
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
 
-  if (selectionValues.length === 0) {
-    return redirectToDashboard(context.request, {
-      error: 'Select at least one file or folder to share.',
-      path: currentPath,
-    })
-  }
-
   let fileKeys = new Set<string>()
   let directoryKeys = new Set<string>()
 
-  for (let value of selectionValues) {
-    if (value.startsWith('file:')) {
-      let key = value.slice('file:'.length)
-      if (key) {
-        fileKeys.add(key)
-      }
-      continue
+  if (selectionValues.length === 0) {
+    if (currentPath) {
+      directoryKeys.add(currentPath)
+    } else {
+      return redirectToDashboard(context.request, {
+        error: 'Select at least one file or folder to share.',
+        path: currentPath,
+      })
     }
-    if (value.startsWith('directory:')) {
-      let directory = value.slice('directory:'.length)
-      if (directory) {
-        directoryKeys.add(directory)
+  } else {
+    for (let value of selectionValues) {
+      if (value.startsWith('file:')) {
+        let key = value.slice('file:'.length)
+        if (key) {
+          fileKeys.add(key)
+        }
+        continue
       }
-      continue
+      if (value.startsWith('directory:')) {
+        let directory = value.slice('directory:'.length)
+        if (directory) {
+          directoryKeys.add(directory)
+        }
+        continue
+      }
+      fileKeys.add(value)
     }
-    fileKeys.add(value)
   }
 
   if (fileKeys.size === 0 && directoryKeys.size === 0) {

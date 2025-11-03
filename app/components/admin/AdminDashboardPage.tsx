@@ -8,6 +8,8 @@ import { FilesSection } from './FilesSection.tsx'
 import { RequestUploadsSection } from './RequestUploadsSection.tsx'
 import { ShareListSection } from './ShareListSection.tsx'
 
+type HrefForPath = (targetPath: string, options?: { selection?: string[] }) => string
+
 type AdminDashboardPageProps = {
   user: SessionData
   directory: AdminDirectoryListing
@@ -17,6 +19,7 @@ type AdminDashboardPageProps = {
   highlightToken?: string
   baseUrl: string
   currentPath: string
+  selectedEntries: string[]
 }
 
 export function AdminDashboardPage({
@@ -28,8 +31,9 @@ export function AdminDashboardPage({
   highlightToken,
   currentPath,
   baseUrl,
+  selectedEntries,
 }: AdminDashboardPageProps) {
-  let hrefForPath = (targetPath: string) => {
+  let hrefForPath: HrefForPath = (targetPath, options) => {
     let url = new URL(baseUrl)
     if (targetPath) {
       url.searchParams.set('path', targetPath)
@@ -39,23 +43,20 @@ export function AdminDashboardPage({
     url.searchParams.delete('message')
     url.searchParams.delete('error')
     url.searchParams.delete('share')
-    return `${url.pathname}${url.search}`
+    url.searchParams.delete('selection')
+
+    let selectionValues = options?.selection ?? selectedEntries
+    for (let value of selectionValues) {
+      url.searchParams.append('selection', value)
+    }
+
+    return `${url.pathname}${url.search}#files`
   }
 
   return (
     <Layout user={user}>
-      <header className="space-y-3">
-        <h2 className="text-3xl font-semibold tracking-tight text-white">Admin Console</h2>
-        <p className="max-w-2xl text-base leading-relaxed text-slate-300">
-          Upload assets, curate secure download links, or invite collaborators to send files without
-          granting full access.
-        </p>
-      </header>
-
-      <div className="space-y-3">
         {message ? <FlashMessage message={message} /> : null}
         {error ? <FlashMessage message={error} /> : null}
-      </div>
 
       <div className="space-y-8">
         <div className="grid gap-8 lg:grid-cols-2">
@@ -63,7 +64,11 @@ export function AdminDashboardPage({
           <RequestUploadsSection currentPath={currentPath} />
         </div>
 
-        <FilesSection directory={directory} hrefForPath={hrefForPath} />
+        <FilesSection
+          directory={directory}
+          hrefForPath={hrefForPath}
+          selectedEntries={selectedEntries}
+        />
       </div>
 
       <ShareListSection
