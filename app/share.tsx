@@ -1,6 +1,5 @@
 import type { BuildRouteHandler, RouteHandlers } from '@remix-run/fetch-router'
-
-import { routes } from '../routes.ts'
+import type { routes } from '../routes.ts'
 import { handleDownloadShare } from './modules/share/download.tsx'
 import { handleUploadShareView, handleUploadShareAction } from './modules/share/upload.tsx'
 

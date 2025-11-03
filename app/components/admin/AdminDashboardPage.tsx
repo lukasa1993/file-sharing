@@ -1,5 +1,5 @@
 import type { SessionData } from '../../utils/session.ts'
-import type { AdminFile } from '../../models/admin.server.ts'
+import type { AdminDirectoryListing } from '../../models/admin.server.ts'
 import type { ShareRecord } from '../../utils/share-store.ts'
 import { Layout } from '../Layout.tsx'
 import { FlashMessage } from './FlashMessage.tsx'
@@ -10,23 +10,38 @@ import { ShareListSection } from './ShareListSection.tsx'
 
 type AdminDashboardPageProps = {
   user: SessionData
-  files: AdminFile[]
+  directory: AdminDirectoryListing
   shares: ShareRecord[]
   message?: string
   error?: string
   highlightToken?: string
   baseUrl: string
+  currentPath: string
 }
 
 export function AdminDashboardPage({
   user,
-  files,
+  directory,
   shares,
   message,
   error,
   highlightToken,
+  currentPath,
   baseUrl,
 }: AdminDashboardPageProps) {
+  let hrefForPath = (targetPath: string) => {
+    let url = new URL(baseUrl)
+    if (targetPath) {
+      url.searchParams.set('path', targetPath)
+    } else {
+      url.searchParams.delete('path')
+    }
+    url.searchParams.delete('message')
+    url.searchParams.delete('error')
+    url.searchParams.delete('share')
+    return `${url.pathname}${url.search}`
+  }
+
   return (
     <Layout user={user}>
       <header className="space-y-3">
@@ -42,14 +57,21 @@ export function AdminDashboardPage({
         {error ? <FlashMessage message={error} /> : null}
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-2">
-        <UploadSection />
-        <RequestUploadsSection />
+      <div className="space-y-8">
+        <div className="grid gap-8 lg:grid-cols-2">
+          <UploadSection currentPath={currentPath} />
+          <RequestUploadsSection currentPath={currentPath} />
+        </div>
+
+        <FilesSection directory={directory} hrefForPath={hrefForPath} />
       </div>
 
-      <FilesSection files={files} />
-
-      <ShareListSection shares={shares} highlightToken={highlightToken} baseUrl={baseUrl} />
+      <ShareListSection
+        shares={shares}
+        highlightToken={highlightToken}
+        baseUrl={baseUrl}
+        currentPath={currentPath}
+      />
     </Layout>
   )
 }

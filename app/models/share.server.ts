@@ -26,6 +26,7 @@ export async function createDownloadShareLink(
 export async function createUploadShareLink(options?: {
   expiresInMinutes?: number
   maxBytes?: number
+  targetDirectory?: string
 }) {
   return createUploadShare(options)
 }

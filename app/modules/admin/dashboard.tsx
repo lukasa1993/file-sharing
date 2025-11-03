@@ -12,17 +12,19 @@ export async function adminDashboard(context: RequestContext) {
   let message = context.url.searchParams.get('message') ?? undefined
   let error = context.url.searchParams.get('error') ?? undefined
   let highlightToken = context.url.searchParams.get('share') ?? undefined
+  let path = context.url.searchParams.get('path') ?? undefined
 
-  let { files, shares } = await getDashboardData()
+  let { directory, shares } = await getDashboardData(path)
 
   return render(
     <AdminDashboardPage
       user={session}
-      files={files}
+      directory={directory}
       shares={shares}
       message={message}
       error={error}
       highlightToken={highlightToken}
+      currentPath={directory.path}
       baseUrl={context.request.url}
     />,
   )

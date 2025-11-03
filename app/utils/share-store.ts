@@ -19,6 +19,7 @@ export type UploadShare = {
   expiresAt?: Date
   maxBytes?: number
   uploadedBytes: number
+  targetDirectory?: string
 }
 
 export type ShareRecord = DownloadShare | UploadShare
@@ -34,6 +35,7 @@ type PersistedShare = {
   maxFiles?: number
   uploadedBytes?: number
   uploadedCount?: number
+  targetDirectory?: string | null
 }
 
 const shareStorePath = config.shareStoreFile
@@ -68,7 +70,9 @@ export async function createDownloadShare(
 export async function createUploadShare(options?: {
   expiresInMinutes?: number
   maxBytes?: number
+  targetDirectory?: string
 }) {
+  let targetDirectory = normalizeDirectoryPath(options?.targetDirectory)
   let token = randomToken()
   let record: UploadShare = {
     token,
@@ -77,6 +81,7 @@ export async function createUploadShare(options?: {
     expiresAt: resolveExpiry(options?.expiresInMinutes),
     maxBytes: options?.maxBytes,
     uploadedBytes: 0,
+    targetDirectory,
   }
 
   shares.set(token, record)
@@ -162,6 +167,56 @@ export async function registerUpload(token: string, bytes: number) {
   await persistShares()
 }
 
+export async function replaceFileKeys(replacements: Array<{ from: string; to: string }>) {
+  if (replacements.length === 0) {
+    return
+  }
+
+  let mapping = new Map<string, string>()
+  for (let { from, to } of replacements) {
+    if (from === to) continue
+    mapping.set(from, to)
+  }
+
+  if (mapping.size === 0) {
+    return
+  }
+
+  let changed = false
+
+  for (let [token, record] of shares) {
+    if (record.kind !== 'download') continue
+
+    let updated = false
+    let nextKeys: string[] = []
+
+    for (let key of record.fileKeys) {
+      let replacement = mapping.get(key)
+      if (replacement) {
+        updated = true
+        nextKeys.push(replacement)
+      } else {
+        nextKeys.push(key)
+      }
+    }
+
+    if (updated) {
+      let uniqueKeys = Array.from(new Set(nextKeys))
+      if (uniqueKeys.length === 0) {
+        shares.delete(token)
+      } else {
+        record.fileKeys = uniqueKeys
+        shares.set(token, record)
+      }
+      changed = true
+    }
+  }
+
+  if (changed) {
+    await persistShares()
+  }
+}
+
 async function loadSharesFromDisk() {
   try {
     let file = Bun.file(shareStorePath)
@@ -192,6 +247,7 @@ async function loadSharesFromDisk() {
           expiresAt: record.expiresAt ? new Date(record.expiresAt) : undefined,
           maxBytes: record.maxBytes ?? undefined,
           uploadedBytes: record.uploadedBytes ?? 0,
+          targetDirectory: record.targetDirectory ?? undefined,
         })
       }
     }
@@ -219,6 +275,7 @@ async function persistShares() {
         expiresAt: record.expiresAt ? record.expiresAt.toISOString() : null,
         maxBytes: record.maxBytes,
         uploadedBytes: record.uploadedBytes,
+        targetDirectory: record.targetDirectory ?? null,
       })
     }
   }
@@ -240,4 +297,26 @@ function isExpired(record: ShareRecord) {
 
 function randomToken() {
   return randomBytes(24).toString('base64url')
+}
+
+function normalizeDirectoryPath(input?: string | null) {
+  if (input == null) {
+    return undefined
+  }
+
+  let trimmed = input.trim()
+  if (trimmed === '' || trimmed === '/') {
+    return ''
+  }
+
+  let replaced = trimmed.replace(/\\/g, '/')
+  let segments = replaced.split('/').filter((segment) => segment.length > 0)
+
+  for (let segment of segments) {
+    if (segment === '.' || segment === '..') {
+      throw new Error('Folder path cannot contain navigation segments.')
+    }
+  }
+
+  return segments.join('/')
 }

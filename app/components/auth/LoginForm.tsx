@@ -28,7 +28,13 @@ export function LoginForm({ actionUrl, error }: LoginFormProps) {
       <form method="POST" action={actionUrl} className="space-y-4">
         <label className="block text-sm font-medium text-slate-200">
           Username
-          <input name="username" type="text" required autoComplete="username" className={inputClass} />
+          <input
+            name="username"
+            type="text"
+            required
+            autoComplete="username"
+            className={inputClass}
+          />
         </label>
         <label className="block text-sm font-medium text-slate-200">
           Password

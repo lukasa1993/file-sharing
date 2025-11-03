@@ -41,7 +41,7 @@ export async function handleDownloadShare({ token, request }: DownloadShareParam
     return shareUnavailable('All shared files were removed.')
   }
 
-  return render(<DownloadSharePage token={token} share={share} files={files} />)
+  return render(<DownloadSharePage share={share} files={files} />)
 }
 
 async function respondWithFileDownload({

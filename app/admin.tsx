@@ -1,8 +1,13 @@
 import type { RouteHandlers } from '@remix-run/fetch-router'
-
-import { routes } from '../routes.ts'
+import type { routes } from '../routes.ts'
 import { adminDashboard } from './modules/admin/dashboard.tsx'
-import { adminUpload, adminDeleteFile } from './modules/admin/files.ts'
+import {
+  adminUpload,
+  adminDeleteFile,
+  adminCreateDirectory,
+  adminDeleteDirectory,
+  adminMoveEntries,
+} from './modules/admin/files.ts'
 import {
   adminCreateDownloadShare,
   adminCreateUploadShare,
@@ -14,6 +19,9 @@ export default {
   index: adminDashboard,
   upload: adminUpload,
   deleteFile: adminDeleteFile,
+  createDirectory: adminCreateDirectory,
+  deleteDirectory: adminDeleteDirectory,
+  moveEntries: adminMoveEntries,
   createDownloadShare: adminCreateDownloadShare,
   createUploadShare: adminCreateUploadShare,
   revokeShare: adminRevokeShare,

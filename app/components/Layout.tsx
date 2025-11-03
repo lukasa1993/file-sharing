@@ -39,8 +39,7 @@ export function Layout({ user, children, variant = 'chrome' }: LayoutProps) {
                 {user ? (
                   <>
                     <li className="text-sm text-slate-300">
-                      Signed in as{' '}
-                      <span className="font-semibold text-white">{user.username}</span>
+                      Signed in as <span className="font-semibold text-white">{user.username}</span>
                     </li>
                     <li>
                       <form
@@ -87,9 +86,7 @@ export function Layout({ user, children, variant = 'chrome' }: LayoutProps) {
         {showChrome ? (
           <footer className="border-t border-slate-800/70 bg-slate-950/70">
             <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 py-5 text-sm text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-              <small className="font-medium tracking-wide text-slate-300">
-                File sharing demo
-              </small>
+              <small className="font-medium tracking-wide text-slate-300">File sharing demo</small>
               <span className="text-xs uppercase tracking-[0.25em] text-slate-500">
                 Secure transfers made simple
               </span>

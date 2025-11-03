@@ -5,6 +5,7 @@ type DashboardRedirectOptions = {
   message?: string
   error?: string
   share?: string
+  path?: string
 }
 
 export function redirectToDashboard(request: Request, options: DashboardRedirectOptions = {}) {
@@ -13,6 +14,7 @@ export function redirectToDashboard(request: Request, options: DashboardRedirect
       message: options.message,
       error: options.error,
       share: options.share,
+      path: options.path,
     },
   })
 }

@@ -6,7 +6,7 @@ import {
   revokeShareToken,
   type UploadShare,
 } from '../../models/share.server.ts'
-import { saveFile } from '../../utils/uploads.ts'
+import { isIgnoredUpload, saveFile } from '../../utils/uploads.ts'
 import { render } from '../../utils/render.ts'
 import { routes } from '../../../routes.ts'
 import { UploadSharePage } from '../../components/share/UploadSharePage.tsx'
@@ -29,7 +29,6 @@ export function handleUploadShareView({ token, request }: { token: string; reque
 
   return render(
     <UploadSharePage
-      token={token}
       share={share as UploadShare}
       actionUrl={actionUrl}
       message={message ?? undefined}
@@ -55,11 +54,16 @@ export async function handleUploadShareAction({
   let formData = await readContextFormData(context)
   let files = formData.getAll('files').filter((value): value is File => value instanceof File)
 
-  if (files.length === 0) {
-    return redirectToUploadShare(request, token, { error: 'Select one or more files to send.' })
+  let uploadableFiles = files.filter((file) => !isIgnoredUpload(file))
+  let skipped = files.length - uploadableFiles.length
+
+  if (uploadableFiles.length === 0) {
+    let errorMessage =
+      files.length > 0 ? 'Only system files were selected.' : 'Select one or more files to send.'
+    return redirectToUploadShare(request, token, { error: errorMessage })
   }
 
-  let totalBytes = files.reduce((total, file) => total + file.size, 0)
+  let totalBytes = uploadableFiles.reduce((total, file) => total + file.size, 0)
 
   if (share.maxBytes != null && share.maxBytes > 0) {
     let remaining = share.maxBytes - share.uploadedBytes
@@ -77,18 +81,25 @@ export async function handleUploadShareAction({
     }
   }
 
-  await Promise.all(files.map((file) => saveFile(file, { prefix: `share/${token}` })))
+  let destinationPrefix = share.targetDirectory ?? `share/${token}`
+  await Promise.all(uploadableFiles.map((file) => saveFile(file, { prefix: destinationPrefix })))
   await registerUploadForToken(token, totalBytes)
 
   let updatedShare = findShare(token)
+  let uploadSummary = `Uploaded ${uploadableFiles.length} file${
+    uploadableFiles.length === 1 ? '' : 's'
+  } (${formatBytes(totalBytes)}).`
+  let skippedMessage =
+    skipped > 0 ? ` Skipped ${skipped} hidden file${skipped === 1 ? '' : 's'}.` : ''
+
   if (!updatedShare || updatedShare.kind !== 'upload') {
     return uploadShareCompleted(
-      `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} (${formatBytes(totalBytes)}). This link has now reached its limit and is closed.`,
+      `${uploadSummary}${skippedMessage} Upload link has reached its limit and is now closed.`,
     )
   }
 
   return redirectToUploadShare(request, token, {
-    message: `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} (${formatBytes(totalBytes)}).`,
+    message: `${uploadSummary}${skippedMessage} Files delivered successfully.`,
   })
 }
 

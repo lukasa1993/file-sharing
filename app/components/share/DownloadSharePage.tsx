@@ -1,12 +1,7 @@
 import type { DownloadShare } from '../../models/share.server.ts'
 import { Layout } from '../Layout.tsx'
 import { formatBytes, formatDate } from '../../utils/format.ts'
-import {
-  cardClass,
-  primaryButtonClass,
-  sectionDescriptionClass,
-  sectionTitleClass,
-} from '../ui.ts'
+import { cardClass, primaryButtonClass, sectionDescriptionClass, sectionTitleClass } from '../ui.ts'
 
 type DownloadShareFile = {
   key: string
@@ -18,12 +13,11 @@ type DownloadShareFile = {
 }
 
 type DownloadSharePageProps = {
-  token: string
   share: DownloadShare
   files: DownloadShareFile[]
 }
 
-export function DownloadSharePage({ token, share, files }: DownloadSharePageProps) {
+export function DownloadSharePage({ share, files }: DownloadSharePageProps) {
   let listCardClass =
     'rounded-2xl border border-slate-800/80 bg-slate-950/60 p-5 shadow-lg shadow-slate-950/40 transition hover:border-slate-700/70'
 
@@ -37,10 +31,11 @@ export function DownloadSharePage({ token, share, files }: DownloadSharePageProp
             expires or is revoked.
           </p>
           <div className="rounded-xl border border-slate-800/80 bg-slate-950/60 px-4 py-3 text-xs uppercase tracking-wide text-slate-400">
-            Token <span className="text-slate-200">{token}</span>
-            {share.expiresAt
-              ? ` · Expires ${formatDate(share.expiresAt.getTime())}`
-              : ' · No expiry set'}
+            <span className="text-slate-200">
+              {share.expiresAt
+                ? `Link expires ${formatDate(share.expiresAt.getTime())}`
+                : 'No expiry set for this link'}
+            </span>
           </div>
         </header>
         <ul className="grid gap-4 md:grid-cols-2">
@@ -58,10 +53,6 @@ export function DownloadSharePage({ token, share, files }: DownloadSharePageProp
                   <span>{formatBytes(file.size)}</span>
                   <span className="font-medium text-slate-300">Updated</span>
                   <span>{formatDate(file.lastModified)}</span>
-                </div>
-                <div className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
-                  Key:{' '}
-                  <code className="break-all text-slate-300">{file.key}</code>
                 </div>
                 <a
                   href={file.downloadUrl}

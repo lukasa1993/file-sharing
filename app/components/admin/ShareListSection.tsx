@@ -14,9 +14,15 @@ type ShareListSectionProps = {
   shares: ShareRecord[]
   highlightToken?: string
   baseUrl: string
+  currentPath: string
 }
 
-export function ShareListSection({ shares, highlightToken, baseUrl }: ShareListSectionProps) {
+export function ShareListSection({
+  shares,
+  highlightToken,
+  baseUrl,
+  currentPath,
+}: ShareListSectionProps) {
   let hasShares = shares.length > 0
 
   return (
@@ -72,11 +78,21 @@ export function ShareListSection({ shares, highlightToken, baseUrl }: ShareListS
                     </div>
                     <div className="text-sm text-slate-300">
                       {share.kind === 'download'
-                        ? `${share.fileKeys.length} file${
-                            share.fileKeys.length === 1 ? '' : 's'
-                          }`
+                        ? `${share.fileKeys.length} file${share.fileKeys.length === 1 ? '' : 's'}`
                         : summarizeUploadShare(share)}
                     </div>
+                    {share.kind === 'upload' ? (
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Destination:
+                        <span className="ml-1 font-semibold text-slate-300">
+                          {share.targetDirectory != null
+                            ? share.targetDirectory === ''
+                              ? '/'
+                              : `/${share.targetDirectory}`
+                            : `share/${share.token}`}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="text-xs uppercase tracking-wide text-slate-500">
                       Created {formatDate(share.createdAt.getTime())}
                       {share.expiresAt
@@ -90,6 +106,7 @@ export function ShareListSection({ shares, highlightToken, baseUrl }: ShareListS
                     className="self-start"
                   >
                     <input type="hidden" name="token" value={share.token} />
+                    <input type="hidden" name="path" value={currentPath} />
                     <button type="submit" className={dangerButtonClass}>
                       Revoke
                     </button>

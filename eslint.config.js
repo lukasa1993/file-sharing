@@ -1,5 +1,4 @@
 import tseslint from 'typescript-eslint'
-import preferLet from 'eslint-plugin-prefer-let'
 
 /** @type {import('eslint').Linter.Config[]} */
 export default [
@@ -70,17 +69,5 @@ export default [
       // Ensure no rule asks for explicit member accessibility
       '@typescript-eslint/explicit-member-accessibility': 'off',
     },
-  },
-  {
-    files: ['**/*.{ts,tsx,js,jsx}'],
-    plugins: {
-      'prefer-let': preferLet,
-    },
-    rules: {
-      // Prefer `let` for locals; allow `const` only at module scope
-      'prefer-let/prefer-let': 'error',
-      // Disallow `var` entirely
-      'no-var': 'error',
-    },
-  },
+  }
 ]

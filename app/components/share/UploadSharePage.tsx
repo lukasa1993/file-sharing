@@ -11,14 +11,13 @@ import {
 } from '../ui.ts'
 
 type UploadSharePageProps = {
-  token: string
   share: UploadShare
   actionUrl: string
   message?: string | null
   error?: string | null
 }
 
-export function UploadSharePage({ token, share, actionUrl, message, error }: UploadSharePageProps) {
+export function UploadSharePage({ share, actionUrl, message, error }: UploadSharePageProps) {
   let alertBaseClass =
     'rounded-xl border px-4 py-3 text-sm font-medium shadow-inner backdrop-blur transition'
   let successClass = `${alertBaseClass} border-emerald-500/40 bg-emerald-500/10 text-emerald-100 shadow-emerald-500/20`
@@ -34,26 +33,24 @@ export function UploadSharePage({ token, share, actionUrl, message, error }: Upl
             storage. Uploaded items appear instantly in the admin console.
           </p>
           <div className="rounded-xl border border-slate-800/80 bg-slate-950/60 px-4 py-3 text-xs uppercase tracking-wide text-slate-400">
-            Token <span className="text-slate-200">{token}</span>
-            {share.expiresAt
-              ? ` · Expires ${formatDate(share.expiresAt.getTime())}`
-              : ' · No expiry set'}
-            {' · '}
-            {summarizeUploadShare(share)}
+            <div className="flex flex-col gap-1">
+              <span className="text-slate-200">
+                {share.expiresAt
+                  ? `Link expires ${formatDate(share.expiresAt.getTime())}`
+                  : 'No expiry set for this link'}
+              </span>
+              <span>{summarizeUploadShare(share)}</span>
+            </div>
           </div>
         </header>
         {message ? <p className={successClass}>{message}</p> : null}
         {error ? <p className={errorClass}>{error}</p> : null}
-        <form
-          method="POST"
-          action={actionUrl}
-          encType="multipart/form-data"
-          className="space-y-4"
-        >
+        <form method="POST" action={actionUrl} encType="multipart/form-data" className="space-y-4">
           <label className="block text-sm font-medium text-slate-200">
             Files to upload
             <input type="file" name="files" multiple required className={fileInputClass} />
           </label>
+          <p className="text-xs text-slate-400">Hidden system files are ignored automatically.</p>
           <button type="submit" className={primaryButtonClass}>
             Send files
           </button>

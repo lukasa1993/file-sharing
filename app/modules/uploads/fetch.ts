@@ -1,7 +1,7 @@
-import { uploadsStorage } from '../../utils/uploads.ts'
+import { getStoredFile } from '../../utils/uploads.ts'
 
 export async function serveUploadedFile(key: string) {
-  let file = await uploadsStorage.get(key)
+  let file = await getStoredFile(key)
 
   if (!file) {
     return new Response('File not found', { status: 404 })

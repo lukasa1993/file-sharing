@@ -21,4 +21,3 @@ export const dangerButtonClass =
   'inline-flex items-center justify-center rounded-xl bg-rose-500/90 px-3 py-2 text-sm font-semibold text-rose-50 shadow-lg shadow-rose-500/40 transition hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-400/80 focus:ring-offset-2 focus:ring-offset-slate-950'
 
 export const inlineLinkClass = 'text-sky-300 transition hover:text-sky-200'
-
