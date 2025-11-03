@@ -27,10 +27,7 @@ export type DashboardData = {
 }
 
 export async function getDashboardData(path?: string): Promise<DashboardData> {
-  let [directory, shares] = await Promise.all([
-    listDirectoryEntries(path),
-    listShareRecords(),
-  ])
+  let [directory, shares] = await Promise.all([listDirectoryEntries(path), listShareRecords()])
   return {
     directory,
     shares,

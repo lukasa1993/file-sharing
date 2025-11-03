@@ -16,7 +16,7 @@ if (process.env.NODE_ENV === 'development') {
   middleware.push(logger())
 }
 
-middleware.push(formData({ uploadHandler }))
+middleware.push(formData({ uploadHandler, maxFileSize: 1024 * 1024 * 1024 * 1024, maxFiles: 500 }))
 middleware.push(methodOverride())
 middleware.push(storeContext())
 

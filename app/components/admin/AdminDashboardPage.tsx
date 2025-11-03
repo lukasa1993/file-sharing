@@ -55,8 +55,8 @@ export function AdminDashboardPage({
 
   return (
     <Layout user={user}>
-        {message ? <FlashMessage message={message} /> : null}
-        {error ? <FlashMessage message={error} /> : null}
+      {message ? <FlashMessage message={message} /> : null}
+      {error ? <FlashMessage message={error} /> : null}
 
       <div className="space-y-8">
         <div className="grid gap-8 lg:grid-cols-2">

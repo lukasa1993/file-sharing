@@ -71,7 +71,7 @@ export function RequestUploadsSection({ currentPath }: RequestUploadsSectionProp
               Examples: 50 MB, 1.5 GB. Use 0 or leave blank for unlimited.
             </p>
           </label>
-          <button type="submit" className={primaryButtonClass}>
+          <button type="submit" className={`${primaryButtonClass} w-full`}>
             Generate upload link
           </button>
         </form>

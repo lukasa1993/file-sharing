@@ -41,7 +41,7 @@ export function UploadSection({ currentPath }: UploadSectionProps) {
           Hidden system files are skipped automatically. Create folders above and move files to keep
           things organized.
         </p>
-        <button type="submit" className={primaryButtonClass}>
+        <button type="submit" className={`${primaryButtonClass} w-full`}>
           Upload files
         </button>
       </form>

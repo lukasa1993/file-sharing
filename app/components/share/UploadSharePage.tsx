@@ -51,7 +51,7 @@ export function UploadSharePage({ share, actionUrl, message, error }: UploadShar
             <input type="file" name="files" multiple required className={fileInputClass} />
           </label>
           <p className="text-xs text-slate-400">Hidden system files are ignored automatically.</p>
-          <button type="submit" className={primaryButtonClass}>
+          <button type="submit" className={`${primaryButtonClass} w-full`}>
             Send files
           </button>
         </form>

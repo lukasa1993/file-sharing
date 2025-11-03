@@ -45,9 +45,7 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
   let selectedEntriesSet = new Set(selectedEntries)
   let currentTokens = new Set(
     entries.map((entry) =>
-      entry.kind === 'directory'
-        ? directoryToken(entry.entry)
-        : fileToken(entry.entry),
+      entry.kind === 'directory' ? directoryToken(entry.entry) : fileToken(entry.entry),
     ),
   )
   let persistedSelections = selectedEntries.filter((value) => !currentTokens.has(value))
@@ -85,7 +83,7 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
                 Use 0 for no expiry.
               </span>
             </label>
-            <button type="submit" className={primaryButtonClass}>
+            <button type="submit" className={`${primaryButtonClass} w-full sm:w-auto`}>
               Generate download link
             </button>
           </div>
@@ -104,7 +102,7 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
             <button
               type="submit"
               formAction={routes.admin.createDirectory.href()}
-              className={`${secondaryButtonClass} px-3 py-1.5 text-xs font-semibold uppercase tracking-wide`}
+              className={`${secondaryButtonClass} w-full text-xs font-semibold uppercase tracking-wide sm:w-auto sm:self-end`}
             >
               Create folder
             </button>
@@ -152,8 +150,13 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
               {selectedEntries.map((token) => {
                 let updatedSelection = selectedEntries.filter((value) => value !== token)
                 return (
-                  <li key={`selection-${token}`} className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-medium text-slate-200">{formatSelectionLabel(token)}</span>
+                  <li
+                    key={`selection-${token}`}
+                    className="flex flex-wrap items-center justify-between gap-2"
+                  >
+                    <span className="font-medium text-slate-200">
+                      {formatSelectionLabel(token)}
+                    </span>
                     <a
                       href={hrefForPath(path, { selection: updatedSelection })}
                       className={`${inlineLinkClass} text-xs uppercase tracking-wide`}
