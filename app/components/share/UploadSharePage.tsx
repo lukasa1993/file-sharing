@@ -43,8 +43,16 @@ export function UploadSharePage({ share, actionUrl, message, error }: UploadShar
             </div>
           </div>
         </header>
-        {message ? <p className={successClass}>{message}</p> : null}
-        {error ? <p className={errorClass}>{error}</p> : null}
+        {message ? (
+          <p data-flash-message role="status" className={successClass}>
+            {message}
+          </p>
+        ) : null}
+        {error ? (
+          <p data-flash-message role="status" className={errorClass}>
+            {error}
+          </p>
+        ) : null}
         <form method="POST" action={actionUrl} encType="multipart/form-data" className="space-y-4">
           <div className="space-y-3 sm:space-y-0 sm:flex sm:gap-3">
             <label className="block text-sm font-medium text-slate-200 sm:flex-1">

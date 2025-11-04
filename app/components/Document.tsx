@@ -111,6 +111,60 @@ export function Document({ title = 'File Sharing Demo', children }: DocumentProp
 })()
   `.trim()
 
+  let flashMessageScript = `
+(() => {
+  let handle = () => {
+    let nodes = Array.from(document.querySelectorAll('[data-flash-message]'))
+    if (nodes.length === 0) {
+      return
+    }
+
+    let clearUrl = () => {
+      let url = new URL(window.location.href)
+      let removed = false
+      if (url.searchParams.has('message')) {
+        url.searchParams.delete('message')
+        removed = true
+      }
+      if (url.searchParams.has('error')) {
+        url.searchParams.delete('error')
+        removed = true
+      }
+      if (removed) {
+        let next = url.pathname + url.search + url.hash
+        window.history.replaceState(window.history.state, '', next)
+      }
+    }
+
+    let dismiss = () => {
+      for (let rawNode of nodes) {
+        if (!(rawNode instanceof HTMLElement)) {
+          continue
+        }
+        let node = rawNode
+        node.setAttribute('aria-hidden', 'true')
+        node.style.transition = node.style.transition || 'opacity 200ms ease'
+        node.style.opacity = '0'
+        window.setTimeout(() => {
+          if (node.parentElement) {
+            node.remove()
+          }
+        }, 200)
+      }
+      clearUrl()
+    }
+
+    window.setTimeout(dismiss, 5000)
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', handle, { once: true })
+  } else {
+    handle()
+  }
+})()
+  `.trim()
+
   return (
     <html lang="en" className="h-full">
       <head>
@@ -122,6 +176,7 @@ export function Document({ title = 'File Sharing Demo', children }: DocumentProp
       <body className="min-h-full bg-slate-950 text-slate-100 antialiased selection:bg-sky-500/30 selection:text-white">
         {children}
         <script type="module" innerHTML={doubleConfirmScript} />
+        <script type="module" innerHTML={flashMessageScript} />
       </body>
     </html>
   )
