@@ -515,7 +515,7 @@ function setupUploadShare(root) {
         theme: 'dark',
         showLinkToFileUploadResult: false,
         proudlyDisplayPoweredByUppy: false,
-        fileManagerSelectionType: 'filesAndFolders',
+        fileManagerSelectionType: 'both',
         note: 'Drop files or folders. Uploads resume automatically if interrupted.',
       })
 
