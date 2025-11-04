@@ -6,7 +6,7 @@ import {
   revokeShareToken,
   type UploadShare,
 } from '../../models/share.server.ts'
-import { isIgnoredUpload, saveFile } from '../../utils/uploads.ts'
+import { isDirectoryUpload, isIgnoredUpload, saveFile } from '../../utils/uploads.ts'
 import { render } from '../../utils/render.ts'
 import { routes } from '../../../routes.ts'
 import { UploadSharePage } from '../../components/share/UploadSharePage.tsx'
@@ -54,16 +54,18 @@ export async function handleUploadShareAction({
   let formData = await readContextFormData(context)
   let files = formData.getAll('files').filter((value): value is File => value instanceof File)
 
-  let uploadableFiles = files.filter((file) => !isIgnoredUpload(file))
-  let skipped = files.length - uploadableFiles.length
+  let acceptedUploads = files.filter((file) => !isIgnoredUpload(file))
+  let directories = acceptedUploads.filter((file) => isDirectoryUpload(file))
+  let fileUploads = acceptedUploads.filter((file) => !isDirectoryUpload(file))
+  let skipped = files.length - acceptedUploads.length
 
-  if (uploadableFiles.length === 0) {
+  if (fileUploads.length === 0) {
     let errorMessage =
       files.length > 0 ? 'Only system files were selected.' : 'Select one or more files to send.'
     return redirectToUploadShare(request, token, { error: errorMessage })
   }
 
-  let totalBytes = uploadableFiles.reduce((total, file) => total + file.size, 0)
+  let totalBytes = fileUploads.reduce((total, file) => total + file.size, 0)
 
   if (share.maxBytes != null && share.maxBytes > 0) {
     let remaining = share.maxBytes - share.uploadedBytes
@@ -82,13 +84,17 @@ export async function handleUploadShareAction({
   }
 
   let destinationPrefix = share.targetDirectory ?? `share/${token}`
-  await Promise.all(uploadableFiles.map((file) => saveFile(file, { prefix: destinationPrefix })))
+  await Promise.all(acceptedUploads.map((file) => saveFile(file, { prefix: destinationPrefix })))
   await registerUploadForToken(token, totalBytes)
 
   let updatedShare = findShare(token)
-  let uploadSummary = `Uploaded ${uploadableFiles.length} file${
-    uploadableFiles.length === 1 ? '' : 's'
+  let uploadSummary = `Uploaded ${fileUploads.length} file${
+    fileUploads.length === 1 ? '' : 's'
   } (${formatBytes(totalBytes)}).`
+  let addedFolders = directories.length
+  if (addedFolders > 0) {
+    uploadSummary = `${uploadSummary} Added ${addedFolders} folder${addedFolders === 1 ? '' : 's'}.`
+  }
   let skippedMessage =
     skipped > 0 ? ` Skipped ${skipped} hidden file${skipped === 1 ? '' : 's'}.` : ''
 

@@ -46,13 +46,28 @@ export function UploadSharePage({ share, actionUrl, message, error }: UploadShar
         {message ? <p className={successClass}>{message}</p> : null}
         {error ? <p className={errorClass}>{error}</p> : null}
         <form method="POST" action={actionUrl} encType="multipart/form-data" className="space-y-4">
-          <label className="block text-sm font-medium text-slate-200">
-            Files to upload
-            <input type="file" name="files" multiple required className={fileInputClass} />
-          </label>
-          <p className="text-xs text-slate-400">Hidden system files are ignored automatically.</p>
+          <div className="space-y-3 sm:space-y-0 sm:flex sm:gap-3">
+            <label className="block text-sm font-medium text-slate-200 sm:flex-1">
+              Select files
+              <input type="file" name="files" multiple className={fileInputClass} />
+            </label>
+            <label className="block text-sm font-medium text-slate-200 sm:flex-1">
+              Or upload a folder
+              <input
+                type="file"
+                name="files"
+                multiple
+                webkitdirectory="true"
+                directory="true"
+                className={fileInputClass}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-slate-400">
+            Mix files and folders freely. Hidden system files are ignored automatically.
+          </p>
           <button type="submit" className={`${primaryButtonClass} w-full`}>
-            Send files
+            Send items
           </button>
         </form>
       </section>

@@ -79,9 +79,22 @@ export async function saveFile(
   let providedKey = options?.key ? normalizeRequiredPath(options.key) : undefined
 
   let relativeFromFile = extractRelativePath(file)
-  let relativePath = relativeFromFile ? normalizeOptionalRelativePath(relativeFromFile) : ''
+  let { path: relativePath, isDirectory } = parseRelativeUploadPath(relativeFromFile)
 
   if (isIgnoredUpload(file, relativePath)) {
+    return null
+  }
+
+  if (isDirectory) {
+    let directoryKey =
+      providedKey ??
+      (relativePath ? joinNormalized(prefix, relativePath) : prefix ? prefix : undefined)
+    if (!directoryKey) {
+      return null
+    }
+
+    let directoryPath = resolveStoragePath(directoryKey)
+    await mkdir(directoryPath, { recursive: true })
     return null
   }
 
@@ -101,6 +114,15 @@ export async function saveFile(
     key: targetKey,
     path: publicPathForKey(targetKey),
   }
+}
+
+export function isDirectoryUpload(file: File) {
+  let relativeFromFile = extractRelativePath(file)
+  if (!relativeFromFile) {
+    return false
+  }
+
+  return parseRelativeUploadPath(relativeFromFile).isDirectory
 }
 
 export async function getStoredFile(key: string) {
@@ -436,19 +458,42 @@ function normalizeOptionalRelativePath(input?: string) {
 
 function extractRelativePath(file: File) {
   let candidate = (file as File & { webkitRelativePath?: string }).webkitRelativePath
-  if (typeof candidate !== 'string') {
-    return ''
+
+  if (typeof candidate === 'string' && candidate.length > 0) {
+    return candidate.replace(/\\/g, '/').replace(/^\/+/, '')
   }
 
-  let trimmed = candidate.replace(/\\/g, '/').replace(/^\/+/, '')
-  return trimmed
+  if (typeof file.name === 'string') {
+    if (file.name.includes('/') || file.name.includes('\\')) {
+      return file.name.replace(/\\/g, '/').replace(/^\/+/, '')
+    }
+  }
+
+  return ''
+}
+
+function parseRelativeUploadPath(relativePath: string) {
+  if (!relativePath) {
+    return { path: '', isDirectory: false }
+  }
+
+  let replaced = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
+  let isDirectory = replaced.endsWith('/')
+  let withoutTrailing = isDirectory ? replaced.replace(/\/+$/, '') : replaced
+  let normalized = normalizeOptionalRelativePath(withoutTrailing)
+
+  return { path: normalized, isDirectory }
 }
 
 function isJunkPath(path: string) {
   return path.split('/').some((segment) => isJunkSegment(segment))
 }
 
-function isJunkSegment(segment: string) {
+function isJunkSegment(segment: string | undefined | null) {
+  if (typeof segment !== 'string') {
+    return true
+  }
+
   let trimmed = segment.trim()
   if (trimmed.length === 0) {
     return true
