@@ -8,6 +8,7 @@ import adminHandlers from './admin.tsx'
 import { storeContext } from './middleware/context.ts'
 import { landingPageHandler } from './modules/public/landing.tsx'
 import { downloadShareHandler, uploadShareHandlers } from './share.tsx'
+import { assetsHandler } from './public.ts'
 import { uploadsHandler } from './uploads.tsx'
 import { uploadHandler } from './utils/uploads.ts'
 
@@ -19,6 +20,7 @@ middleware.push(storeContext())
 
 export let router = createRouter({ middleware, defaultHandler: landingPageHandler })
 
+router.get(routes.assets, assetsHandler)
 router.get(routes.uploads, uploadsHandler)
 router.map(routes.admin, adminHandlers)
 router.get(routes.share.download, downloadShareHandler)

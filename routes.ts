@@ -1,6 +1,7 @@
 import { route } from '@remix-run/fetch-router'
 
 export let routes = route({
+  assets: '/assets/*path',
   uploads: '/uploads/*key',
 
   admin: route('/admin', {
