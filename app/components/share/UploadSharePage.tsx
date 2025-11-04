@@ -61,14 +61,17 @@ export function UploadSharePage({ share, actionUrl, message, error }: UploadShar
             </label>
             <label className="block text-sm font-medium text-slate-200 sm:flex-1">
               Or upload a folder
-              <input
-                type="file"
-                name="files"
-                multiple
-                webkitdirectory
-                directory
-                className={fileInputClass}
-              />
+              {
+                <input
+                  type="file"
+                  name="files"
+                  multiple
+                  /* @ts-expect-error - Bun DOM typings omit vendor folder-upload attributes */
+                  webkitdirectory
+                  directory
+                  className={fileInputClass}
+                />
+              }
             </label>
           </div>
           <p className="text-xs text-slate-400">
