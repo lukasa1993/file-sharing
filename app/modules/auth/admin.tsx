@@ -73,7 +73,7 @@ export async function adminLoginAction(context: RequestContext<'POST'>) {
     return renderLoginError(context, redirectTarget, 'Invalid credentials. Please try again.')
   }
 
-  let passwordMatches = await Bun.password.verify(password, config.adminPasswordHash)
+  let passwordMatches = await Bun.password.verify(password, config.adminPasswordHash, 'argon2id')
   if (!passwordMatches) {
     return renderLoginError(context, redirectTarget, 'Invalid credentials. Please try again.')
   }

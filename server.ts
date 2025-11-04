@@ -1,4 +1,5 @@
 import { router } from './app/router.ts'
+import { applySecurityHeaders } from './app/utils/security-headers.ts'
 
 let port = Number.parseInt(Bun.env.PORT ?? '', 10)
 if (!Number.isFinite(port)) {
@@ -9,15 +10,16 @@ let server = Bun.serve({
   port,
   fetch: async (request: Request) => {
     try {
-      return await router.fetch(request)
+      let response = await router.fetch(request)
+      return applySecurityHeaders(response)
     } catch (error) {
       console.error(error)
-      return new Response('Internal Server Error', { status: 500 })
+      return applySecurityHeaders(new Response('Internal Server Error', { status: 500 }))
     }
   },
   error(error: unknown) {
     console.error(error)
-    return new Response('Internal Server Error', { status: 500 })
+    return applySecurityHeaders(new Response('Internal Server Error', { status: 500 }))
   },
 })
 

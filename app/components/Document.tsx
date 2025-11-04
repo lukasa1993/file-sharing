@@ -1,12 +1,7 @@
 import type { Remix } from '@remix-run/dom'
+import { createHash } from 'node:crypto'
 
-type DocumentProps = {
-  title?: string
-  children?: Remix.RemixNode
-}
-
-export function Document({ title = 'File Sharing Demo', children }: DocumentProps) {
-  let doubleConfirmScript = `
+const doubleConfirmScript = `
 (() => {
   let setup = (root) => {
     let trigger = root.querySelector('[data-double-confirm-trigger]')
@@ -109,9 +104,9 @@ export function Document({ title = 'File Sharing Demo', children }: DocumentProp
 
   document.querySelectorAll('[data-double-confirm-root]').forEach((root) => setup(root))
 })()
-  `.trim()
+`.trim()
 
-  let flashMessageScript = `
+const flashMessageScript = `
 (() => {
   let handle = () => {
     let nodes = Array.from(document.querySelectorAll('[data-flash-message]'))
@@ -163,8 +158,23 @@ export function Document({ title = 'File Sharing Demo', children }: DocumentProp
     handle()
   }
 })()
-  `.trim()
+`.trim()
 
+function cspHash(value: string) {
+  return `sha256-${createHash('sha256').update(value).digest('base64')}`
+}
+
+export const documentInlineScriptHashes = [
+  cspHash(doubleConfirmScript),
+  cspHash(flashMessageScript),
+] as const
+
+type DocumentProps = {
+  title?: string
+  children?: Remix.RemixNode
+}
+
+export function Document({ title = 'File Sharing Demo', children }: DocumentProps) {
   return (
     <html lang="en" className="h-full">
       <head>
