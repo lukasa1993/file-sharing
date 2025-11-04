@@ -15,7 +15,10 @@ export async function serveUploadedFile(key: string | undefined) {
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'Content-Length': file.size.toString(),
-      'Cache-Control': 'public, max-age=31536000',
+      'Cache-Control': 'private, no-store',
+      Pragma: 'no-cache',
+      Expires: '0',
+      'X-Content-Type-Options': 'nosniff',
     },
   })
 }

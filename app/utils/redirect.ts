@@ -20,3 +20,32 @@ export function redirectWithSearch(request: Request, to: string, options: Redire
   let status = options.status ?? 303
   return Response.redirect(location.toString(), status)
 }
+
+export function resolveSafeRedirect(
+  request: Request,
+  target: string | null | undefined,
+  fallback: string,
+) {
+  if (typeof target !== 'string') {
+    return fallback
+  }
+
+  let trimmed = target.trim()
+  if (trimmed.length === 0) {
+    return fallback
+  }
+
+  try {
+    let requestUrl = new URL(request.url)
+    let resolved = new URL(trimmed, requestUrl)
+    if (resolved.origin !== requestUrl.origin) {
+      return fallback
+    }
+    if (!resolved.pathname.startsWith('/')) {
+      return fallback
+    }
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`
+  } catch {
+    return fallback
+  }
+}

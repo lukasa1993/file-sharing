@@ -12,6 +12,7 @@ import {
 } from '../../utils/session.ts'
 import { readContextFormData } from '../../utils/form-data.ts'
 import { AdminLoginPage } from '../../components/auth/AdminLoginPage.tsx'
+import { resolveSafeRedirect } from '../../utils/redirect.ts'
 
 const adminSessionKey = createStorageKey<SessionData | null>(null)
 
@@ -44,7 +45,11 @@ export async function adminLoginView(context: RequestContext) {
   }
 
   let error = context.url.searchParams.get('error') ?? undefined
-  let redirectTarget = context.url.searchParams.get('redirect') ?? routes.admin.index.href()
+  let redirectTarget = resolveSafeRedirect(
+    context.request,
+    context.url.searchParams.get('redirect'),
+    routes.admin.index.href(),
+  )
   let actionUrl = `${routes.admin.login.action.href()}?redirect=${encodeURIComponent(redirectTarget)}`
 
   return render(<AdminLoginPage error={error} actionUrl={actionUrl} />)
@@ -54,13 +59,22 @@ export async function adminLoginAction(context: RequestContext<'POST'>) {
   let formData = await readContextFormData(context)
   let username = formData.get('username')
   let password = formData.get('password')
-  let redirectTarget = context.url.searchParams.get('redirect') ?? routes.admin.index.href()
+  let redirectTarget = resolveSafeRedirect(
+    context.request,
+    context.url.searchParams.get('redirect'),
+    routes.admin.index.href(),
+  )
 
   if (typeof username !== 'string' || typeof password !== 'string') {
     return renderLoginError(context, redirectTarget, 'Enter both username and password.')
   }
 
-  if (username !== config.adminUser || password !== config.adminPassword) {
+  if (username !== config.adminUser) {
+    return renderLoginError(context, redirectTarget, 'Invalid credentials. Please try again.')
+  }
+
+  let passwordMatches = await Bun.password.verify(password, config.adminPasswordHash)
+  if (!passwordMatches) {
     return renderLoginError(context, redirectTarget, 'Invalid credentials. Please try again.')
   }
 
@@ -74,7 +88,11 @@ export async function adminLoginAction(context: RequestContext<'POST'>) {
 }
 
 export async function adminLogout(context: RequestContext<'POST'>) {
-  let redirectTarget = context.url.searchParams.get('redirect') ?? routes.admin.login.index.href()
+  let redirectTarget = resolveSafeRedirect(
+    context.request,
+    context.url.searchParams.get('redirect'),
+    routes.admin.login.index.href(),
+  )
   return new Response(null, {
     status: 303,
     headers: {
