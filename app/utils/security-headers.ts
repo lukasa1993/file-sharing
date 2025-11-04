@@ -1,11 +1,7 @@
 import { documentInlineScriptHashes } from '../components/Document.tsx'
 import { config } from '../config.ts'
 
-let scriptSrc = [
-  "'self'",
-  'https://cdn.jsdelivr.net',
-  ...documentInlineScriptHashes,
-]
+let scriptSrc = ["'self'", 'https://cdn.jsdelivr.net', ...documentInlineScriptHashes]
 
 let styleSrc = ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net']
 let connectSrc = ["'self'"]

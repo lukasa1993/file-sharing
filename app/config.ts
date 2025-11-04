@@ -26,7 +26,9 @@ function ensureDirectory(pathname: string) {
 }
 
 const adminUser = requireEnv('FS_ADMIN_USER')
-const adminPasswordHash = Buffer.from(requireEnv('FS_ADMIN_PASSWORD'), 'base64url').toString('utf-8')
+const adminPasswordHash = Buffer.from(requireEnv('FS_ADMIN_PASSWORD'), 'base64url').toString(
+  'utf-8',
+)
 
 const storageRoot = resolvePath(requireEnv('FS_STORAGE_ROOT'))
 ensureDirectory(storageRoot)
