@@ -1,0 +1,29 @@
+name: Notify Auto-Update
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call deployment webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_SECRET" ]; then
+            echo "WEBHOOK_URL or WEBHOOK_SECRET not set; skipping webhook call."
+            exit 0
+          fi
+
+          signature=$(printf 'sha256='; openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary "$GITHUB_EVENT_PATH" | xxd -p -c 256)
+
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: $signature" \
+            -H "X-GitHub-Event: push" \
+            --data @"$GITHUB_EVENT_PATH" \
+            "$WEBHOOK_URL"

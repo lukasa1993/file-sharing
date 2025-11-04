@@ -46,3 +46,14 @@ Environment variables (see `.env.example`):
 - `FS_SESSION_SECRET` — optional secret for signing session cookies (randomized at runtime when omitted).
 - `FS_SESSION_MAX_AGE` — optional session lifetime in seconds (default: 8 hours).
 - `PORT` — optional HTTP port (default: 44100).
+- `GITHUB_WEBHOOK_SECRET` — shared secret used to validate GitHub webhook signatures (required for auto-update).
+
+## GitHub Webhook Auto-Update
+
+The server exposes `POST /webhooks/github`, which consumes GitHub `push` events, validates the `X-Hub-Signature-256` HMAC, and runs `git pull` inside the running project directory. Configure it as follows:
+
+1. Set `GITHUB_WEBHOOK_SECRET` in your deployment environment.
+2. In your GitHub repository settings, add a webhook pointing to `https://<your-domain>/webhooks/github`, selecting the **Push** event and reusing the same secret.
+3. Optionally enable the provided workflow (`.github/workflows/auto-update.yml`), which replays the event payload back to your server with the proper `X-Hub-Signature-256` header. Define two repository secrets: `WEBHOOK_URL` (your production endpoint) and `WEBHOOK_SECRET` (the same value as `GITHUB_WEBHOOK_SECRET`).
+
+The webhook responds with HTTP 202 once `git pull` has been queued (or reports that an update is already running). Output from the pull command is written to the server logs.

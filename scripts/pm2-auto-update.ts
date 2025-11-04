@@ -65,10 +65,6 @@ async function hardReset(ref: string): Promise<void> {
   if (res.code !== 0) throw new Error(`git reset --hard ${ref} failed: ${res.stderr.trim()}`)
 }
 
-
-
-
-
 async function bunInstall(): Promise<void> {
   // Try frozen lockfile first
   let res = await run(BUN_BIN, ['install', '--frozen-lockfile'], repoDir)
@@ -78,8 +74,6 @@ async function bunInstall(): Promise<void> {
     if (res.code !== 0) throw new Error(`bun install failed: ${res.stderr.trim()}`)
   }
 }
-
-
 
 function resolvePm2Bin(): string {
   const local = path.join(repoDir, 'node_modules', '.bin', 'pm2')

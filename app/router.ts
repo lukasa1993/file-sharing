@@ -11,6 +11,7 @@ import { downloadShareHandler, uploadShareHandlers } from './share.tsx'
 import { assetsHandler } from './public.ts'
 import { uploadsHandler } from './uploads.tsx'
 import { uploadHandler } from './utils/uploads.ts'
+import { githubWebhookHandler } from './modules/webhooks/github.ts'
 
 let middleware = []
 middleware.push(logger())
@@ -25,3 +26,4 @@ router.get(routes.uploads, uploadsHandler)
 router.map(routes.admin, adminHandlers)
 router.get(routes.share.download, downloadShareHandler)
 router.map(routes.share.upload, uploadShareHandlers)
+router.post(routes.webhooks.github, githubWebhookHandler)

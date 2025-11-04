@@ -21,6 +21,10 @@ export let routes = route({
     logout: { method: 'POST', pattern: '/logout' },
   }),
 
+  webhooks: route('/webhooks', {
+    github: { method: 'POST', pattern: '/github' },
+  }),
+
   share: {
     download: '/share/download/:token',
     upload: route('/share/upload/:token', {
