@@ -37,8 +37,10 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
   let { path, directories, files } = directory
   let breadcrumbs = buildBreadcrumbs(path)
   let entries: FilesTableEntry[] = [
-    ...directories.map((directoryEntry) => ({ kind: 'directory', entry: directoryEntry })),
-    ...files.map((fileEntry) => ({ kind: 'file', entry: fileEntry })),
+    ...directories.map(
+      (directoryEntry): FilesTableEntry => ({ kind: 'directory', entry: directoryEntry }),
+    ),
+    ...files.map((fileEntry): FilesTableEntry => ({ kind: 'file', entry: fileEntry })),
   ]
   let hasEntries = entries.length > 0
   let bulkActionFormId = 'bulk-action-form'

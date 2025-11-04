@@ -65,8 +65,8 @@ export function UploadSharePage({ share, actionUrl, message, error }: UploadShar
                 type="file"
                 name="files"
                 multiple
-                webkitdirectory="true"
-                directory="true"
+                webkitdirectory
+                directory
                 className={fileInputClass}
               />
             </label>
