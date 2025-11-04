@@ -17,7 +17,11 @@ import {
   revokeShareToken as revokeShareTokenInternal,
   type ShareRecord,
 } from './share.server.ts'
-import { removeFileFromShares, replaceFileKeys } from '../utils/share-store.ts'
+import {
+  removeFileFromShares,
+  removeFilesFromShares,
+  replaceFileKeys,
+} from '../utils/share-store.ts'
 
 export type AdminDirectoryListing = Awaited<ReturnType<typeof listDirectoryEntries>>
 
@@ -47,7 +51,13 @@ export async function deleteFileAndShares(key: string) {
 export async function deleteDirectoryAndShares(path: string) {
   let files = await listStoredFiles({ path, recursive: true })
   await deleteStoredDirectory(path)
-  await Promise.all(files.map((file) => removeFileFromShares(file.key)))
+
+  if (files.length === 0) {
+    return
+  }
+
+  let keys = files.map((file) => file.key)
+  await removeFilesFromShares(keys)
 }
 
 export async function createDirectory(path: string) {

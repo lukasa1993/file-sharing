@@ -125,20 +125,53 @@ export async function removeShare(token: string) {
 }
 
 export async function removeFileFromShares(fileKey: string) {
+  if (typeof fileKey !== 'string' || fileKey.length === 0) {
+    return
+  }
+
+  await removeFilesFromShares([fileKey])
+}
+
+export async function removeFilesFromShares(fileKeys: string[]) {
+  let normalizedKeys = fileKeys
+    .map((key) => (typeof key === 'string' ? key.trim() : ''))
+    .filter((key) => key.length > 0)
+
+  if (normalizedKeys.length === 0) {
+    return
+  }
+
+  let targets = new Set(normalizedKeys)
   let changed = false
+
   for (let [token, record] of shares) {
-    if (record.kind === 'download') {
-      let filtered = record.fileKeys.filter((key) => key !== fileKey)
-      if (filtered.length !== record.fileKeys.length) {
-        changed = true
-        if (filtered.length === 0) {
-          shares.delete(token)
-        } else {
-          record.fileKeys = filtered
-          shares.set(token, record)
-        }
-      }
+    if (record.kind !== 'download') {
+      continue
     }
+
+    let updated = false
+    let nextKeys: string[] = []
+
+    for (let key of record.fileKeys) {
+      if (targets.has(key)) {
+        updated = true
+        continue
+      }
+      nextKeys.push(key)
+    }
+
+    if (!updated) {
+      continue
+    }
+
+    if (nextKeys.length === 0) {
+      shares.delete(token)
+    } else {
+      record.fileKeys = nextKeys
+      shares.set(token, record)
+    }
+
+    changed = true
   }
 
   if (changed) {
