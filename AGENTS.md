@@ -22,21 +22,31 @@
 
 ## Security
 
-You are analyzing a code repository for security vulnerabilities. Review the provided code from the repository: File Sharing, admin part, sharable upload flow and sharable download flow, single and bunlk files/folders
+Perform a security review of this File Sharing repo (admin area; sharable upload/download flows for single and bulk files/folders). Base all findings strictly on code in this repo.
 
-Follow these steps:
-1. Summarize the repository: Identify the main languages, frameworks, dependencies, and overall structure. Highlight entry points like APIs, user inputs, or data flows.
-2. Scan for vulnerabilities: Check against OWASP Top 10, including injection (SQL, command), broken authentication, sensitive data exposure, XML external entities, broken access control, security misconfigurations, cross-site scripting (XSS), insecure deserialization, using components with known vulnerabilities, and insufficient logging/monitoring.
-3. Analyze dependencies: List third-party libraries and check for known vulnerabilities (simulate tools like OWASP Dependency-Check). Suggest updates or safer alternatives.
-4. Review code practices: Look for issues like hard-coded secrets, improper error handling, lack of input validation/sanitization, unsafe crypto implementations, race conditions, or buffer overflows. Ensure least privilege, secure defaults, and proper encryption.
-5. Simulate tools: Pretend to run static analysis like CodeQL, Bandit, or Semgrep. Flag any potential findings.
-6. Suggest fixes: For each issue, provide specific, secure code improvements with explanations. Use secure libraries (e.g., bcrypt for hashing, parameterized queries).
-7. Iterative review: Review your own analysis for missed problems, then improve it.
+Constraints
+- Bun + web standards (Web Streams, Uint8Array, Web Crypto, Blob/File). No Node-only APIs.
+- TypeScript strict; no `any`; ESNext/ES2022 modules; TailwindCSS; JSX without React APIs.
+- Use the import/export style defined above.
 
-Output in this format:
-- **Summary**: High-level overview.
-- **Vulnerabilities Found**: Bullet list with severity (low/medium/high/critical), description, affected files/lines, and evidence.
-- **Recommendations**: Actionable fixes with code snippets.
-- **Overall Security Score**: 1-10 rating with justification.
+Output format
+- Summary
+- Vulnerabilities Found: severity, description, affected files/lines, evidence
+- Recommendations: actionable fixes with Bun/TS-compatible snippets
+- Overall Security Score (1–10) with rationale
 
-Prioritize accuracy, cite standards like OWASP or SAFECode, and avoid hallucinations—base on provided code only.
+What to do
+1) Summarize: languages/deps; structure; routes/handlers; storage; tokens/links; entry points and data flows (HTTP params, headers, cookies, JSON, multipart, filenames, content types).
+2) Scan (OWASP Top 10) + file-sharing specifics: path traversal/symlinks, Zip Slip, content-type sniffing, Content-Disposition/filename injection, dangerous extensions/Unicode, range requests, quotas/size/timeouts/rate limits/DoS, token entropy/expiry/scope/revocation, IDOR/cross-tenant leakage, CSRF on admin.
+3) Dependencies: list third-party libs; simulate vulnerability check; propose safe versions/alternatives.
+4) Code practices: secrets, validation/sanitization, crypto (AES-GCM with random IV; scrypt/Argon2/PBKDF2), auth/session/cookie flags, authorization on every endpoint and bulk ops, error handling (no info leaks), logging/audit (no secrets; security events).
+5) Simulate static analysis (CodeQL/Semgrep-like) with rule-style findings and file:line evidence.
+6) Fixes: precise Bun/Web API–compatible TypeScript changes (no Node APIs, no `any`): safe path resolution, allowlisted MIME/extension, RFC 5987 Content-Disposition, signed tokens with expiry/scope, CSRF defenses, size/time/rate limits, safe ZIP/TAR handling.
+7) Iterate; mark uncertain items as “Needs verification.”
+
+Evidence
+- Cite exact file paths and line ranges using path-based code blocks:
+  ```path/in/repo.ts#L12-28
+  (snippet)
+  ```
+- Prioritize accuracy; cite OWASP/ASVS/SAFECode where relevant.
