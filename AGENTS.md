@@ -17,3 +17,4 @@
 - we use bun runtime
 - every bit of ui must work flawlessly on desktop ipad and iphone
 - we have JSX but we don't have react so never ever try to use react api
+- we must always use BUN apis https://bun.com/docs.md
