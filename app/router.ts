@@ -6,6 +6,7 @@ import { methodOverride } from '@remix-run/fetch-router/method-override-middlewa
 import { routes } from '../routes.ts'
 import adminHandlers from './admin.tsx'
 import { storeContext } from './middleware/context.ts'
+import { landingPageHandler } from './modules/public/landing.tsx'
 import { downloadShareHandler, uploadShareHandlers } from './share.tsx'
 import { uploadsHandler } from './uploads.tsx'
 import { uploadHandler } from './utils/uploads.ts'
@@ -20,7 +21,7 @@ middleware.push(formData({ uploadHandler, maxFileSize: 1024 * 1024 * 1024 * 1024
 middleware.push(methodOverride())
 middleware.push(storeContext())
 
-export let router = createRouter({ middleware })
+export let router = createRouter({ middleware, defaultHandler: landingPageHandler })
 
 router.get(routes.uploads, uploadsHandler)
 router.map(routes.admin, adminHandlers)
