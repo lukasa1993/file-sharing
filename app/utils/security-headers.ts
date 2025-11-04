@@ -1,8 +1,8 @@
 import { config } from '../config.ts'
 
-let scriptSrc = ["'self'", 'https://cdn.jsdelivr.net']
+let scriptSrc = ["'self'"]
 
-let styleSrc = ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net']
+let styleSrc = ["'self'", "'unsafe-inline'"]
 let connectSrc = ["'self'"]
 let imgSrc = ["'self'", 'data:', 'blob:']
 let fontSrc = ["'self'", 'data:']

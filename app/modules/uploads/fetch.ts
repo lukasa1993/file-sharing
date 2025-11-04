@@ -5,7 +5,14 @@ export async function serveUploadedFile(key: string | undefined) {
     return new Response('File key is required', { status: 404 })
   }
 
-  let file = await getStoredFile(key)
+  let decodedKey: string
+  try {
+    decodedKey = key.split('/').map((segment) => decodeURIComponent(segment)).join('/')
+  } catch {
+    return new Response('File key is invalid', { status: 400 })
+  }
+
+  let file = await getStoredFile(decodedKey)
 
   if (!file) {
     return new Response('File not found', { status: 404 })

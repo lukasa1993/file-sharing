@@ -319,11 +319,10 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
                       <div className="flex items-center justify-end gap-3">
                         <a
                           href={getPublicFileUrl(fileEntry.key)}
-                          target="_blank"
-                          rel="noreferrer"
+                          download={fileEntry.name}
                           className={`${secondaryButtonClass} px-3 py-1.5 text-xs font-semibold`}
                         >
-                          Open
+                          Download
                         </a>
                         <form method="POST" action={routes.admin.deleteFile.href()}>
                           <input type="hidden" name="key" value={fileEntry.key} />

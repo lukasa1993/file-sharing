@@ -36,6 +36,9 @@ ensureDirectory(storageRoot)
 const dbDirectory = resolvePath(requireEnv('FS_DB_DIR'))
 ensureDirectory(dbDirectory)
 
+const resumableRoot = join(dbDirectory, '.resumable')
+ensureDirectory(resumableRoot)
+
 const shareStoreFile = join(dbDirectory, 'shares.json')
 const sessionSecret = Bun.env.FS_SESSION_SECRET?.trim() || randomBytes(32).toString('hex')
 const sessionMaxAgeSeconds = optionalEnvInt('FS_SESSION_MAX_AGE') ?? 60 * 60 * 8
@@ -45,6 +48,8 @@ export const config = {
   adminUser,
   adminPasswordHash,
   storageRoot,
+  dbDirectory,
+  resumableRoot,
   shareStoreFile,
   sessionSecret,
   sessionMaxAgeSeconds,
