@@ -16,3 +16,4 @@
 - we use eslint and prettier
 - we use bun runtime
 - every bit of ui must work flawlessly on desktop ipad and iphone
+- we have JSX but we don't have react so never ever try to use react api

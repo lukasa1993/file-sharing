@@ -2,8 +2,9 @@ module.exports = {
   apps: [
     {
       name: 'file-sharing',
-      script: 'server.ts',
-      interpreter: 'bun',
+      script: '/bin/sh',
+      args: "-lc 'bun server.ts'",
+      interpreter: 'none',
       env: {
         NODE_ENV: 'production',
         PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH}`,
@@ -11,8 +12,9 @@ module.exports = {
     },
     {
       name: 'auto-update:file-sharing',
-      script: './scripts/pm2-auto-update.ts',
-      interpreter: 'bun',
+      script: '/bin/sh',
+      args: "-lc 'bun ./scripts/pm2-auto-update.ts'",
+      interpreter: 'none',
       cron_restart: '*/10 * * * *',
       autorestart: false,
       watch: false,

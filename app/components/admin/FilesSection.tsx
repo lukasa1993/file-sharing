@@ -4,7 +4,6 @@ import { getPublicFileUrl } from '../../models/admin.server.ts'
 import { formatBytes, formatDate } from '../../utils/format.ts'
 import {
   cardClass,
-  dangerButtonClass,
   inputClass,
   primaryButtonClass,
   sectionDescriptionClass,
@@ -12,6 +11,7 @@ import {
   secondaryButtonClass,
   inlineLinkClass,
 } from '../ui.ts'
+import { DoubleConfirmDeleteButton } from './DoubleConfirmDeleteButton.tsx'
 
 type HrefForPath = (targetPath: string, options?: { selection?: string[] }) => string
 
@@ -260,12 +260,11 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
                           <form method="POST" action={routes.admin.deleteDirectory.href()}>
                             <input type="hidden" name="directory" value={directoryEntry.key} />
                             <input type="hidden" name="path" value={path} />
-                            <button
-                              type="submit"
-                              className={`${dangerButtonClass} px-3 py-1.5 text-xs font-semibold`}
-                            >
-                              Delete
-                            </button>
+                            <DoubleConfirmDeleteButton
+                              itemKind="folder"
+                              itemLabel={directoryEntry.name}
+                              triggerLabel="Delete"
+                            />
                           </form>
                         </div>
                       </td>
@@ -327,12 +326,11 @@ export function FilesSection({ directory, hrefForPath, selectedEntries }: FilesS
                         <form method="POST" action={routes.admin.deleteFile.href()}>
                           <input type="hidden" name="key" value={fileEntry.key} />
                           <input type="hidden" name="path" value={path} />
-                          <button
-                            type="submit"
-                            className={`${dangerButtonClass} px-3 py-1.5 text-xs font-semibold`}
-                          >
-                            Delete
-                          </button>
+                          <DoubleConfirmDeleteButton
+                            itemKind="file"
+                            itemLabel={fileEntry.name}
+                            triggerLabel="Delete"
+                          />
                         </form>
                       </div>
                     </td>
