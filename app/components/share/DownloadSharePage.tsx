@@ -74,9 +74,7 @@ export function DownloadSharePage({ share, files }: DownloadSharePageProps) {
             </span>
           </div>
         </header>
-        <div className="space-y-4">
-          {renderShareNode(rootNode, 0)}
-        </div>
+        <div className="space-y-4">{renderShareNode(rootNode, 0)}</div>
       </section>
     </Layout>
   )
@@ -97,9 +95,7 @@ export function DownloadSharePage({ share, files }: DownloadSharePageProps) {
           <details className={accordionClass} {...(depth === 0 ? { open: true } : {})}>
             <summary className={summaryClass}>
               <div className="space-y-1">
-                <p className="text-sm font-semibold text-white">
-                  {node.name || 'Shared files'}
-                </p>
+                <p className="text-sm font-semibold text-white">{node.name || 'Shared files'}</p>
                 <p className="text-xs uppercase tracking-wide text-slate-500">{pathLabel}</p>
               </div>
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">

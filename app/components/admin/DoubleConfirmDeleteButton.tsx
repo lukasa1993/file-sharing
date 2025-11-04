@@ -53,10 +53,7 @@ export function DoubleConfirmDeleteButton({
           className="group/dc w-full max-w-sm rounded-2xl border border-rose-500/40 bg-slate-950/95 p-6 text-left text-sm text-slate-200 shadow-2xl shadow-rose-900/40 transition-transform duration-200 ease-out data-[stage=second]:-translate-y-4 data-[stage=second]:translate-x-16 sm:data-[stage=second]:translate-x-24"
         >
           <div className="space-y-3">
-            <p
-              id={titleId}
-              className="text-xs font-semibold uppercase tracking-wide text-rose-200"
-            >
+            <p id={titleId} className="text-xs font-semibold uppercase tracking-wide text-rose-200">
               Confirm deletion
             </p>
             <p
@@ -73,8 +70,8 @@ export function DoubleConfirmDeleteButton({
               Final check: this delete cannot be reversed.
             </p>
             <p className="text-xs text-slate-400">
-              This action permanently removes the {itemKind === 'folder' ? 'folder' : 'file'} and its
-              contents.
+              This action permanently removes the {itemKind === 'folder' ? 'folder' : 'file'} and
+              its contents.
             </p>
           </div>
 

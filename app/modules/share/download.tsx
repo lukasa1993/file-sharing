@@ -154,8 +154,9 @@ async function respondWithFolderArchive({
     return shareUnavailable('Folder not found or contains no files.')
   }
 
-  let rawRootName =
-    normalized ? normalized.split('/').at(-1) ?? normalized : `share-${token.slice(0, 8)}`
+  let rawRootName = normalized
+    ? (normalized.split('/').at(-1) ?? normalized)
+    : `share-${token.slice(0, 8)}`
   let archiveRootName = sanitizeArchivePath(rawRootName) || `share-${token.slice(0, 8)}`
   let directoryPaths = new Set<string>([''])
   let fileEntries: ZipArchiveEntry[] = []
