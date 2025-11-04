@@ -25,24 +25,8 @@ function ensureDirectory(pathname: string) {
   mkdirSync(pathname, { recursive: true })
 }
 
-function optionalEnv(key: string) {
-  let value = Bun.env[key]
-  if (!value) {
-    return undefined
-  }
-  let trimmed = value.trim()
-  return trimmed === '' ? undefined : trimmed
-}
-
-async function resolveAdminPasswordHash() {
-  let plainPassword = requireEnv('FS_ADMIN_PASSWORD')
-  let generatedHash = await Bun.password.hash(plainPassword)
-
-  return generatedHash
-}
-
 const adminUser = requireEnv('FS_ADMIN_USER')
-const adminPasswordHash = await resolveAdminPasswordHash()
+const adminPasswordHash = requireEnv('FS_ADMIN_PASSWORD')
 
 const storageRoot = resolvePath(requireEnv('FS_STORAGE_ROOT'))
 ensureDirectory(storageRoot)
