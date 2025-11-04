@@ -7,7 +7,10 @@ export async function serveUploadedFile(key: string | undefined) {
 
   let decodedKey: string
   try {
-    decodedKey = key.split('/').map((segment) => decodeURIComponent(segment)).join('/')
+    decodedKey = key
+      .split('/')
+      .map((segment) => decodeURIComponent(segment))
+      .join('/')
   } catch {
     return new Response('File key is invalid', { status: 400 })
   }

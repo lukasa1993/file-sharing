@@ -112,12 +112,7 @@ export function UploadSharePage({ share, actionUrl, message, error }: UploadShar
               Send items
             </button>
           </div>
-          <div
-            className="hidden space-y-4"
-            data-upload-resumable-panel
-            aria-hidden="true"
-            hidden
-          >
+          <div className="hidden space-y-4" data-upload-resumable-panel aria-hidden="true" hidden>
             <div className="rounded-xl border border-slate-800/70 bg-slate-950/70 px-2 py-2">
               <div data-uppy-root className="min-h-[20rem]" />
             </div>

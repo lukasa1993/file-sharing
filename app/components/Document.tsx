@@ -14,10 +14,7 @@ export function Document({ title = 'File Sharing Demo', children }: DocumentProp
         <meta charSet="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <script src={routes.assets.href({ path: 'vendor/tailwind-browser.js' })} />
-        <link
-          rel="stylesheet"
-          href={routes.assets.href({ path: 'vendor/uppy.min.css' })}
-        />
+        <link rel="stylesheet" href={routes.assets.href({ path: 'vendor/uppy.min.css' })} />
         <script type="module" async src={routes.assets.href({ path: 'app.js' })} />
         <title>{title}</title>
       </head>

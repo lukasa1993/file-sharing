@@ -141,9 +141,7 @@ function redirectToUploadShare(
   options: { message?: string; error?: string; completed?: boolean } = {},
 ) {
   if (wantsJsonResponse(request)) {
-    let redirectPath = options.completed
-      ? null
-      : buildUploadRedirectPath(request, token, options)
+    let redirectPath = options.completed ? null : buildUploadRedirectPath(request, token, options)
     let status = options.error ? 422 : 200
     return jsonResponse(
       {
@@ -239,7 +237,8 @@ async function handleResumableUpload({
 
   let fileName = decodeUploadHeader(request.headers.get('x-file-name')) ?? 'upload.bin'
   let relativePath = decodeUploadHeader(request.headers.get('x-file-relative-path')) ?? ''
-  let fileType = decodeUploadHeader(request.headers.get('x-file-type')) ?? 'application/octet-stream'
+  let fileType =
+    decodeUploadHeader(request.headers.get('x-file-type')) ?? 'application/octet-stream'
   let lastModifiedHeader = request.headers.get('x-file-last-modified')
   let lastModified = lastModifiedHeader ? Number.parseInt(lastModifiedHeader, 10) : Number.NaN
   if (!Number.isFinite(lastModified) || lastModified <= 0) {
@@ -323,7 +322,10 @@ async function handleResumableUpload({
   try {
     resultingSize = await writeResumableChunk(dataPath, chunkBuffer, contentRange.start)
   } catch (error) {
-    return jsonResponse({ error: (error as Error).message || 'Unable to write chunk.' }, { status: 500 })
+    return jsonResponse(
+      { error: (error as Error).message || 'Unable to write chunk.' },
+      { status: 500 },
+    )
   }
 
   let nextOffset = contentRange.end + 1

@@ -156,14 +156,24 @@ export async function getFileSize(pathname: string): Promise<number | null> {
 }
 
 export function isNoEntryError(error: unknown): error is NodeJS.ErrnoException {
-  return Boolean(error) && typeof error === 'object' && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  return (
+    Boolean(error) &&
+    typeof error === 'object' &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  )
 }
 
-async function bunWrite(pathname: string, data: string | Uint8Array, options?: { append?: boolean }) {
+async function bunWrite(
+  pathname: string,
+  data: string | Uint8Array,
+  options?: { append?: boolean },
+) {
   let payload = typeof data === 'string' ? new TextEncoder().encode(data) : data
-  return (Bun.write as unknown as (path: string, chunk: Uint8Array, opts?: { append?: boolean }) => Promise<number>)(
-    pathname,
-    payload,
-    options,
-  )
+  return (
+    Bun.write as unknown as (
+      path: string,
+      chunk: Uint8Array,
+      opts?: { append?: boolean },
+    ) => Promise<number>
+  )(pathname, payload, options)
 }

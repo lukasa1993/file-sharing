@@ -304,7 +304,8 @@ async function handleAdminResumableUpload({ request }: { request: Request }) {
       return jsonResponse({ error: 'Upload metadata missing for chunk.' }, { status: 409 })
     }
     let fileName = decodeUploadHeader(request.headers.get('x-file-name')) ?? 'upload.bin'
-    let fileType = decodeUploadHeader(request.headers.get('x-file-type')) ?? 'application/octet-stream'
+    let fileType =
+      decodeUploadHeader(request.headers.get('x-file-type')) ?? 'application/octet-stream'
     let relativePath = decodeUploadHeader(request.headers.get('x-file-relative-path')) ?? ''
     let lastModifiedHeader = request.headers.get('x-file-last-modified')
     let lastModified = lastModifiedHeader ? Number.parseInt(lastModifiedHeader, 10) : Number.NaN

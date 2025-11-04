@@ -43,14 +43,20 @@ function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean {
   return diff === 0
 }
 
-async function verifySignature(secret: string, payload: ArrayBuffer, signature: string): Promise<boolean> {
+async function verifySignature(
+  secret: string,
+  payload: ArrayBuffer,
+  signature: string,
+): Promise<boolean> {
   const prefix = 'sha256='
   if (!signature.startsWith(prefix)) return false
 
   const provided = hexToBytes(signature.slice(prefix.length))
   if (!provided) return false
 
-  const key = await crypto.subtle.importKey('raw', textEncoder.encode(secret), 'HMAC', false, ['sign'])
+  const key = await crypto.subtle.importKey('raw', textEncoder.encode(secret), 'HMAC', false, [
+    'sign',
+  ])
   const expected = await crypto.subtle.sign({ name: 'HMAC', hash: 'SHA-256' }, key, payload)
 
   return timingSafeEqual(new Uint8Array(expected), provided)
@@ -114,7 +120,8 @@ export async function githubWebhookHandler({ request }: RequestContext): Promise
   }
 
   const signature = request.headers.get('x-hub-signature-256')
-  if (!signature) return Response.json({ error: 'Missing X-Hub-Signature-256 header' }, { status: 400 })
+  if (!signature)
+    return Response.json({ error: 'Missing X-Hub-Signature-256 header' }, { status: 400 })
 
   const event = request.headers.get('x-github-event')
   if (!event) return Response.json({ error: 'Missing X-GitHub-Event header' }, { status: 400 })
