@@ -1,6 +1,10 @@
 import { getStoredFile } from '../../utils/uploads.ts'
 
-export async function serveUploadedFile(key: string) {
+export async function serveUploadedFile(key: string | undefined) {
+  if (typeof key !== 'string' || key.length === 0) {
+    return new Response('File key is required', { status: 404 })
+  }
+
   let file = await getStoredFile(key)
 
   if (!file) {
