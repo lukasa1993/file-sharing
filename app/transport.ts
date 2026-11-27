@@ -10,7 +10,7 @@ type Handler = (
 // Bun's node:http implementation preserves Content-Length on streamed file ranges.
 // Remix owns Web Request construction, disconnect propagation, backpressure and cookie headers.
 export async function listenHttp(
-  options: { hostname: string; port: number },
+  options: { hostname: string; port: number; publicProtocol?: string },
   handler: Handler,
 ) {
   let closing = false
@@ -32,6 +32,9 @@ export async function listenHttp(
         (request) => handler(request, incoming.socket.remoteAddress, idle),
         {
           trustProxy: false,
+          ...(options.publicProtocol
+            ? { protocol: options.publicProtocol }
+            : {}),
           onError(error) {
             console.error(
               JSON.stringify({

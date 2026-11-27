@@ -4,6 +4,7 @@ import { trustedProxyPeers } from '../app/proxy.ts'
 import { localNext } from '../app/http.ts'
 import { requestRef, resource } from '../app/metadata.ts'
 import { refUrl } from '../app/ui/base.tsx'
+import { listenHttp } from '../app/transport.ts'
 
 test('uses the connected peer unless the host explicitly trusts a proxy', () => {
   const resolve = trustedProxyPeers(['10.1.0.0/16'])
@@ -18,6 +19,25 @@ test('returns login redirects within the application', () => {
   expect(localNext('/_/files?mount=home')).toBe('/_/files?mount=home')
   expect(localNext('https://example.test')).toBe('/')
   expect(localNext('//example.test')).toBe('/')
+})
+
+test('constructs the canonical HTTPS URL behind a TLS terminator using the supplied host', async () => {
+  const server = await listenHttp(
+    { hostname: '127.0.0.1', port: 0, publicProtocol: 'https:' },
+    (req) => new Response(req.url),
+  )
+  try {
+    const response = await fetch(new URL('/login', server.url), {
+      headers: {
+        Host: 'files.example:80',
+        'X-Forwarded-Proto': 'http',
+        'X-Forwarded-Host': 'unused.example',
+      },
+    })
+    expect(await response.text()).toBe('https://files.example:80/login')
+  } finally {
+    await server.stop(true)
+  }
 })
 test('preserves valid Unicode and literal percent signs in storage references', () => {
   expect(

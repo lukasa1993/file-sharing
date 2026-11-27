@@ -19,6 +19,7 @@ async function main() {
           process.env.HOST ??
           (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
         port: config.port,
+        publicProtocol: new URL(config.publicOrigin).protocol,
       },
       (request, peer, preparing) => {
         app.services.transfers.setPreparationTimeout(request, preparing)
