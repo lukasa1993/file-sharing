@@ -723,6 +723,11 @@ test('the token cap can be cleared individually, while invalid scope or expiry n
 })
 
 test('old accounts have an unlimited live rate budget and new settings survive a restart', async () => {
+  // Reopen the pre-bandwidth schema with an existing account and no bootstrap credentials.
+  db.exec('DROP TABLE auth_user_bandwidth')
+  await rm(join(dir, 'bootstrap'))
+  await identity.init()
+  expect(identity.getUser(admin.id)).toEqual(admin)
   const budget = identity.bandwidthBudget(admin.id)
   expect(budget.rate()).toBe(0)
   for (const input of [-1, 1.5, {}, 'invalid', Number.MAX_SAFE_INTEGER + 1]) {
@@ -749,7 +754,7 @@ test('old accounts have an unlimited live rate budget and new settings survive a
     bytesPerSecond: '',
   })
   expect(budget.rate()).toBe(0)
-})
+}, 20000)
 test('entry points find effective nested grants across denied roots and hide restricted homes', async () => {
   await identity.manage(admin, {
     action: 'createUser',

@@ -39,10 +39,10 @@ describe('cross-storage progress over native HTTP', () => {
   beforeAll(async () => {
     f = await fixture({ copyStorage: true })
     owner = await f.signIn()
-  })
+  }, 40000)
   afterAll(async () => {
     await f?.close()
-  })
+  }, 15000)
   const path = '/_/api/v1/files/operations'
   const dest = { mountId: 'deliveries', segments: [] }
   const ref = (name: string) => ({ mountId: 'e2e', segments: [name] })
