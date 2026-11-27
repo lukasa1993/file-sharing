@@ -73,6 +73,17 @@ Build the image with `docker build -t fileserver:check .`. With Docker, OpenSSL 
 
 Set `NGINX_BIN` to the NGINX executable and `LSHARE_IMAGE` to use a different local image tag. On hosts where a rootless daemon publishes TCP ports in a separate namespace, set `LSHARE_PROXY_SOCKET=1` to carry the proxy upstream through a private Unix socket. For an ARM64 image on an amd64 test host, set `QEMU_AARCH64` to a static local QEMU user-mode executable. This exercises the ARM64 Bun runtime on the host kernel under emulation.
 
+To exercise real disk exhaustion without filling host storage, run the following from the checkout with the built amd64 or native ARM64 image:
+
+```sh
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /capacity:rw,nodev,nosuid,noexec,size=16m,mode=1777 --tmpfs /tmp:rw,nodev,nosuid,noexec \
+  --mount "type=bind,src=$PWD,dst=/checkout,readonly" -w /checkout -e TMPDIR=/capacity \
+  fileserver:check scripts/storage-pressure.ts
+```
+
+The checkout needs its frozen dependencies installed. The check requires an empty temporary filesystem of at most 32 MiB, retains the last acknowledged upload offset under pressure and checks the retried file on disk.
+
 Recursive filename searches admit one active scan per account and two across the service. An account can start twelve scans per minute, with a combined ceiling of 120. Scans yield the mount between directories so ordinary file operations can proceed. Narrow the starting folder when the entry limit is reached.
 
 ## Account transfer limits
@@ -151,3 +162,5 @@ Use Bun’s native `bun pm licenses --prod --json` to export the installed produ
 ## Upgrade or roll back
 
 Back up metadata and storage before the upgrade. Build the pinned image, restore the backup into an isolated instance with matching storage copies, and run the release gates before switching the live service. Keep the previous image digest and snapshots until the new version has served verified handoffs. If a migration changed the database layout, roll back using the previous image and its matching snapshots.
+
+The large transfer acceptance command uses private scratch files and checks capacity before reserving them. For the full 101 GiB download from a sparse source, run `bun scripts/large-acceptance.ts --sparse-download`. To repeat the physically allocated upload and download measured on the cloud host, run `bun scripts/large-acceptance.ts --bytes 2214592512`. In allocated mode the default size is 101 GiB per copy. Use `--directory` and `--receiver-directory` to choose scratch volumes. The client verifies the digest, byte count and the server’s response to its resumed range request.
