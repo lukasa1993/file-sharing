@@ -199,6 +199,8 @@ describe('Cloudflare file handoff', { session: 'cloud-owner' }, () => {
     await browser.clearCookies()
     await app.open(path)
     await verify(screen, 'sender')
+    // Verification reloads this page. Wait for the authorized view before attaching to its file input.
+    await screen.getByRole('heading', 'Add files').waitFor()
 
     await screen.getByLabel('Choose files').setInputFiles({
       name,
