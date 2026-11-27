@@ -59,6 +59,10 @@
     "server.ts",
     "scripts",
     "tests",
+    "shared",
+    "cloudflare/browser",
+    "cloudflare/e2e.config.ts",
     "e2e.config.ts"
-  ]
+  ],
+  "exclude": ["tests/cloudflare", "scripts/cloud-fixture-worker.ts"]
 }

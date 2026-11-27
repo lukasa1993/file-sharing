@@ -12,3 +12,5 @@
 !scripts/ops.ts
 !scripts/storage-inventory.ts
 !scripts/build.ts
+!shared/
+!shared/**

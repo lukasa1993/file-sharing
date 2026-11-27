@@ -6,3 +6,9 @@ tmp/
 .quality/
 .stryker-tmp/
 dist/
+.cloudflare/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env.*
+!.env.example

@@ -2,6 +2,17 @@
 
 lshare shares ordinary files from existing storage roots. An owner can create a short download link, share selected items, or request uploads into a folder. Recipients can use the link in a browser. Files remain accessible to trusted applications on the host.
 
+## Deployment profiles
+
+Select the build with `LSHARE_PROFILE=selfhost` or `LSHARE_PROFILE=cloudflare` and run `bun run build`. Self-hosting is the default. The explicit build commands below also select a profile.
+
+| Profile | Build and run | Storage |
+| --- | --- | --- |
+| Self-hosted | `bun run build:selfhost`, then `bun dist/app/server.js` with the settings below | Existing filesystem mounts and local SQLite |
+| Cloudflare | `bun run build:cloudflare` validates the deployment bundle. `bun run cloud:deploy` publishes the configured Worker. | Verified-email accounts, a SQLite Durable Object, direct browser transfers to a private R2 bucket |
+
+The cloud profile targets `dl.ldev.cloud` and accepts files up to 100 MB for 30 days. It emails the operator at 3.6 GB and caps stored plus reserved data at 4 GB. You can deploy using GitHub Actions with private environment secrets. See the [Cloudflare operator guide](docs/cloudflare.md) and the [shared transfer API](docs/transfer-api.md).
+
 ## Local development
 
 Use Bun 1.4.5 on Linux. Initialize disposable storage outside the checkout:

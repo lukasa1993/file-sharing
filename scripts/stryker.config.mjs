@@ -8,6 +8,12 @@ export default {
     ? JSON.parse(selected)
     : [
         'app/**/*.{ts,tsx}',
+        'shared/**/*.{ts,tsx}',
+        'cloudflare/**/*.ts',
+        '!cloudflare/browser/**',
+        '!cloudflare/tests/**',
+        '!cloudflare/e2e.config.ts',
+        'cloudflare/assets/**/*.js',
         'server.ts',
         'public/**/*.js',
         'scripts/ops.ts',
@@ -22,6 +28,9 @@ export default {
   ignorePatterns: [
     '.quality/**',
     '.e2e/**',
+    'cloudflare/.e2e/**',
+    '.cloudflare/**',
+    '.wrangler/**',
     '.git/**',
     '.agents/**',
     '.claude/**',

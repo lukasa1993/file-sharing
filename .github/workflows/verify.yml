@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  LSHARE_MINIO_CACHE: ${{ github.workspace }}/.cloudflare/tools
+
 jobs:
   linux:
     strategy:
@@ -35,6 +38,9 @@ jobs:
         run: bun -e 'for (const name of Object.keys((await Bun.file("package.json").json()).dependencies ?? {})) if (name !== "remix" && name !== "effect" && name !== "@remix-run/ui") throw Error(name)'
       - name: Run native tests
         run: bun test
+      - name: Build the production Cloudflare bundle without deploying
+        if: matrix.runner == 'ubuntu-24.04'
+        run: bun run build:cloudflare
       - name: Check the production container and restart
         run: bash scripts/container-smoke.sh
       - name: Install browser
@@ -43,6 +49,9 @@ jobs:
       - name: Exercise public web entry
         if: matrix.runner == 'ubuntu-24.04'
         run: bun scripts/e2e.ts tests/example.e2e.ts
+      - name: Exercise the Cloudflare upload and recipient handoff locally
+        if: matrix.runner == 'ubuntu-24.04'
+        run: bun run cloud:e2e
 
   mutation-plan:
     runs-on: ubuntu-24.04
@@ -101,7 +110,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .quality/mutation/incremental-*.json
-          key: stryker-bun1.4.5-${{ matrix.index }}-${{ needs.mutation-plan.outputs.scope }}-${{ hashFiles('app/**', 'public/**', 'scripts/**', 'tests/**', 'server.ts', 'bun.lock', 'package.json', 'tsconfig.json', 'e2e.config.ts') }}
+          key: stryker-bun1.4.5-${{ matrix.index }}-${{ needs.mutation-plan.outputs.scope }}-${{ hashFiles('app/**', 'public/**', 'shared/**', 'cloudflare/**', 'scripts/**', 'tests/**', 'server.ts', 'bun.lock', 'package.json', 'tsconfig*.json', 'wrangler.jsonc', 'e2e.config.ts') }}
       - name: Execute mutants with their covering native and browser suites
         env:
           MUTATION_BASE: ${{ needs.mutation-plan.outputs.base }}

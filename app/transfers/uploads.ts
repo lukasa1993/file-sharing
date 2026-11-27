@@ -24,6 +24,7 @@ export type UploadAccess = {
   scope?: string
   cap?: number
   quota?: number
+  idempotencyKey?: string
   getQuota?: () => number | null
   revalidate?: () => void
   location?: string
@@ -126,6 +127,7 @@ function progress(row: Upload) {
 
 export class Uploads {
   private readonly busy = new Set<string>()
+  private readonly creations = new Map<string, Promise<Response>>()
   private readonly writers = new Map<string, Writer>()
   private readonly maxChunk: number
   private readonly ttl: number
@@ -149,6 +151,11 @@ export class Uploads {
     );
     CREATE TABLE IF NOT EXISTS transfer_storage_files(
       upload_id TEXT PRIMARY KEY, mount TEXT NOT NULL, identity TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS transfer_create_keys(
+      upload_id TEXT PRIMARY KEY REFERENCES transfer_uploads(id) ON DELETE CASCADE,
+      actor TEXT NOT NULL, scope TEXT NOT NULL, client_key TEXT NOT NULL,
+      UNIQUE(actor,scope,client_key)
     );
     CREATE INDEX IF NOT EXISTS idx_upload_mount ON transfer_uploads(mount,state);
     CREATE INDEX IF NOT EXISTS idx_upload_scope ON transfer_uploads(scope,state);
@@ -546,10 +553,68 @@ export class Uploads {
       final_identity: null,
     }
     this.access(row, access)
+    const key = access.idempotencyKey
+    if (!key) return this.allocate(req, access, row, ref)
+    const scopeKey = JSON.stringify([row.actor, row.scope, key])
+    const pending = this.creations.get(scopeKey)
+    if (pending) await pending
+    const existing = this.db
+      .query<Upload, [string, string, string]>(
+        'SELECT u.* FROM transfer_create_keys k JOIN transfer_uploads u ON u.id=k.upload_id WHERE k.actor=? AND k.scope=? AND k.client_key=?',
+      )
+      .get(row.actor, row.scope, key)
+    if (existing) {
+      this.access(existing, access)
+      if (
+        existing.mount !== row.mount ||
+        existing.segments !== row.segments ||
+        existing.bytes !== row.bytes ||
+        existing.conflict !== row.conflict ||
+        existing.expected_digest !== row.expected_digest
+      )
+        throw new AppError(409, 'This upload key belongs to a different file.')
+      if (existing.state === 'allocating')
+        throw new AppError(409, 'Upload preparation is in progress.')
+      return this.created(req, access, existing)
+    }
+    const allocation = this.allocate(req, access, row, ref)
+    this.creations.set(scopeKey, allocation)
+    try {
+      return await allocation
+    } finally {
+      this.creations.delete(scopeKey)
+    }
+  }
+  private created(req: Request, access: UploadAccess, row: Upload) {
+    const location = new URL(access.location ?? '/_/uploads', req.url)
+    location.pathname = location.pathname.replace(/\/$/, '') + '/' + row.id
+    return new Response(null, {
+      status: 201,
+      headers: {
+        ...progress(row),
+        Location: location.pathname + location.search,
+      },
+    })
+  }
+  private async allocate(
+    req: Request,
+    access: UploadAccess,
+    row: Upload,
+    ref: ResourceRef,
+  ) {
+    const { id, mount, bytes: length } = row
     const space = await this.fs.space(mount)
     this.busy.add(id)
     try {
-      this.db.transaction(() => this.reserve(row, access, space.free))()
+      this.db.transaction(() => {
+        this.reserve(row, access, space.free)
+        if (access.idempotencyKey)
+          this.db
+            .query(
+              'INSERT INTO transfer_create_keys(upload_id,actor,scope,client_key) VALUES(?,?,?,?)',
+            )
+            .run(id, row.actor, row.scope, access.idempotencyKey)
+      })()
       try {
         const handle = await this.fs.createStage(ref, id, access.guard)
         try {
@@ -566,18 +631,25 @@ export class Uploads {
           await this.erase(row, 'deleted')
         throw error
       }
-      const location = new URL(access.location ?? '/_/uploads', req.url)
-      location.pathname = location.pathname.replace(/\/$/, '') + '/' + id
-      return new Response(null, {
-        status: 201,
-        headers: {
-          ...progress(this.get(id)),
-          Location: location.pathname + location.search,
-        },
-      })
+      return this.created(req, access, this.get(id))
     } finally {
       this.busy.delete(id)
     }
+  }
+
+  published(id: string, access: UploadAccess) {
+    const row = this.get(id)
+    this.access(row, access)
+    if (row.state !== 'completed' || !row.final_ref)
+      throw new AppError(
+        409,
+        row.state === 'skipped'
+          ? 'This upload was skipped.'
+          : 'This upload has not been published.',
+      )
+    const ref: ResourceRef = JSON.parse(row.final_ref)
+    access.guard('upload', ref)
+    return { ref, size: row.bytes }
   }
 
   private async writeChunk(

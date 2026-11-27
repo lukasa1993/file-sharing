@@ -12,6 +12,9 @@ import { recordResponse } from './monitoring.ts'
 const publicRoutes = new Set(['/', '/login', '/logout', '/healthz', '/readyz'])
 function operationLabel(pathname: string) {
   if (publicRoutes.has(pathname)) return pathname
+  if (pathname.startsWith('/api/transfers/')) return '/api/transfers'
+  if (pathname === '/api/shares' || pathname.startsWith('/api/shares/'))
+    return '/api/shares'
   if (!pathname.startsWith('/_/')) return 'public'
   return (
     /^\/_\/(api|files|folder-permissions|shares|account|admin|trash|preview|inspect|download|archive|uploads|events)(?=\/|$)/.exec(

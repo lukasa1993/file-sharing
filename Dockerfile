@@ -10,6 +10,7 @@ RUN --mount=type=secret,id=registry_ca \
 FROM dependencies AS build
 COPY tsconfig.json server.ts ./
 COPY app ./app
+COPY shared ./shared
 COPY public ./public
 COPY scripts/build.ts ./scripts/build.ts
 COPY scripts/ops.ts scripts/storage-inventory.ts ./scripts/

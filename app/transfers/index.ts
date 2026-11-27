@@ -94,6 +94,9 @@ export class Transfers {
       attempt(() => this.downloads.archive(req, refs, guard, options)),
     )
   }
+  published(id: string, access: UploadAccess) {
+    return this.uploads.published(id, access)
+  }
   uploadTask(req: Request, access: UploadAccess, id?: string) {
     return attempt(() => this.uploads.handle(req, access, id))
   }

@@ -67,24 +67,35 @@ function handledRejection(expression: ts.Expression, checker: ts.TypeChecker) {
   )
 }
 
-async function lint() {
-  assertDependencies()
-  const config = ts.readConfigFile('tsconfig.json', ts.sys.readFile)
+function lintProgram(path: string, files: string[]) {
+  const config = ts.readConfigFile(path, ts.sys.readFile)
   if (config.error)
     throw new Error(
       ts.flattenDiagnosticMessageText(config.error.messageText, '\n'),
     )
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, '.')
+  return ts.createProgram([...new Set([...parsed.fileNames, ...files])], {
+    ...parsed.options,
+    allowJs: true,
+  })
+}
+async function lint() {
+  assertDependencies()
   const files = await sourceFiles()
-  const program = ts.createProgram(
-    [...new Set([...parsed.fileNames, ...files])],
-    { ...parsed.options, allowJs: true },
+  const native = lintProgram(
+    'tsconfig.json',
+    files.filter((p) => !p.startsWith('cloudflare/')),
   )
-  const checker = program.getTypeChecker()
+  const cloud = lintProgram(
+    'tsconfig.cloudflare.json',
+    files.filter((p) => p.startsWith('cloudflare/')),
+  )
   const paths = new Set(files.map((file) => resolve(file)))
   const edges = new Map<string, Set<string>>()
   const issues: string[] = []
   for (const file of files) {
+    const program = file.startsWith('cloudflare/') ? cloud : native
+    const checker = program.getTypeChecker()
     const src = program.getSourceFile(file)
     if (!src) throw new Error('Could not parse ' + file)
     const dependencies = new Set<string>()
@@ -276,6 +287,8 @@ async function runStryker(files: string[], shard = false) {
     {
       ...process.env,
       FILESERVER_MUTATION_FILES: JSON.stringify(files),
+      LSHARE_MINIO_CACHE:
+        process.env.LSHARE_MINIO_CACHE || resolve('.cloudflare/tools'),
       FILESERVER_MUTATION_FINGERPRINT: fingerprint,
       FILESERVER_MUTATION_INCREMENTAL: incremental,
       FILESERVER_MUTATION_SHARD: shard ? '1' : '0',

@@ -56,4 +56,16 @@ process.env.UI_ASSETS_DIR ??= fileserverAssetPath(new URL('../public/', import.m
   }
 }
 
-if (import.meta.main) await buildDistribution()
+if (import.meta.main) {
+  const profile = Bun.argv[2] ?? process.env.LSHARE_PROFILE ?? 'selfhost'
+  if (profile === 'selfhost') await buildDistribution()
+  else if (profile === 'cloudflare') {
+    const child = Bun.spawn(['bun', 'run', 'build:cloudflare'], {
+      cwd: root,
+      stdout: 'inherit',
+      stderr: 'inherit',
+      stdin: 'inherit',
+    })
+    process.exitCode = await child.exited
+  } else throw new Error('LSHARE_PROFILE must be selfhost or cloudflare.')
+}

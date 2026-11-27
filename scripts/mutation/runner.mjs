@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { prepareWorkerd, observeWorkerd } from '../coverage/workerd.mjs'
 import { declareClassPlugin, PluginKind } from '@stryker-mutator/api/plugin'
 import {
   DryRunStatus,
@@ -100,15 +101,25 @@ async function prepareSandbox() {
     'preload=["./scripts/mutation/native.mjs"]\n[test]\npreload=["./scripts/mutation/native.mjs"]\n',
     { flag: 'wx' },
   )
-  const config = await readFile('e2e.config.ts', 'utf8')
-  const browserImport = /(['"])@e2e-dev\/web\1/g
-  if (Array.from(config.matchAll(browserImport)).length !== 1)
-    throw new Error('Expected the configured e2e web engine.')
-  await writeFile(
-    'e2e.config.ts',
-    config.replace(browserImport, '"./scripts/mutation/browser.mjs"'),
-  )
-  const files = [...(await discover('tests')), ...(await discover('scripts'))]
+  for (const [path, wrapper] of [
+    ['e2e.config.ts', './scripts/mutation/browser.mjs'],
+    ['cloudflare/e2e.config.ts', '../scripts/mutation/browser.mjs'],
+  ]) {
+    const config = await readFile(path, 'utf8')
+    const browserImport = /(['"])@e2e-dev\/web\1/g
+    if (Array.from(config.matchAll(browserImport)).length !== 1)
+      throw new Error('Expected the configured e2e web engine in ' + path)
+    await writeFile(
+      path,
+      config.replace(browserImport, JSON.stringify(wrapper)),
+    )
+  }
+  await prepareWorkerd(process.cwd())
+  const files = [
+    ...(await discover('tests')),
+    ...(await discover('scripts')),
+    ...(await discover('cloudflare/browser')),
+  ]
   for (const path of files.filter((f) => f.endsWith('.e2e.ts'))) {
     const helper = relative(dirname(path), 'scripts/mutation/browser.mjs')
     const hook =
@@ -179,13 +190,22 @@ class BunMutationRunner {
       }
     }
     const output = join(work, 'e2e-' + randomUUID())
+    const cloud = suite.id.startsWith('cloudflare/browser/')
+    if (cloud)
+      await observeWorkerd(
+        process.cwd(),
+        env.LSHARE_MUTATION_TRACE ?? null,
+        'mutation',
+        env.__STRYKER_ACTIVE_MUTANT__ ?? null,
+      )
     try {
       const result = await run(
         [
           'bun',
           'run',
           '--no-orphans',
-          'scripts/e2e.ts',
+          cloud ? 'scripts/cloud-fixture.ts' : 'scripts/e2e.ts',
+          ...(cloud ? ['--browser-only'] : []),
           ...suite.args,
           '--exclude-tag',
           'agent',
@@ -196,7 +216,7 @@ class BunMutationRunner {
           '--workers',
           '1',
           '--output',
-          output,
+          resolve(output),
         ],
         env,
         this.children,
@@ -240,33 +260,54 @@ class BunMutationRunner {
       if (options.coverageAnalysis !== 'perTest')
         throw new Error('Bun mutation runner requires perTest coverage.')
       const files = await prepareSandbox()
-      const selection = await run(
-        [
-          'node',
-          'node_modules/e2e/dist/cli/bin.js',
-          'list',
-          '--reporter',
-          'json',
-          '--exclude-tag',
-          'agent',
-        ],
-        { ...process.env, E2E_FIXTURE_OIDC: '1' },
-        this.children,
-        4_000_000,
-        true,
-      )
-      if (selection.code !== 0) throw new Error(selection.output)
-      const browserFiles = new Set(
-        JSON.parse(selection.stdout)
+      const browserFiles = new Set()
+      for (const cloud of [false, true]) {
+        const selection = await run(
+          [
+            'node',
+            'node_modules/e2e/dist/cli/bin.js',
+            'list',
+            ...(cloud ? ['--config', 'cloudflare/e2e.config.ts'] : []),
+            '--reporter',
+            'json',
+            '--exclude-tag',
+            'agent',
+          ],
+          {
+            ...process.env,
+            E2E_FIXTURE_OIDC: '1',
+            ...(cloud
+              ? {
+                  E2E_APP_URL: 'http://127.0.0.1:1',
+                  E2E_MAIL_SPOOL: resolve(work),
+                }
+              : {}),
+          },
+          this.children,
+          4_000_000,
+          true,
+        )
+        if (selection.code !== 0) throw new Error(selection.output)
+        const selected = JSON.parse(selection.stdout)
           .pairs.filter((p) => p.disposition === 'run' && p.kind !== 'setup')
-          .map((p) => p.file),
-      )
+          .map((p) => (cloud ? join('cloudflare', p.file) : p.file))
+        if (!selected.length || selected.some((path) => !files.includes(path)))
+          throw new Error(
+            'The browser selection contains missing or unknown suites.',
+          )
+        for (const path of selected) browserFiles.add(path)
+      }
       const suites = files
         .filter((file) => testPattern.test(file) || browserFiles.has(file))
         .map((file) => ({
           id: file,
           kind: file.endsWith('.e2e.ts') ? 'browser' : 'native',
-          args: ['./' + file],
+          args: [
+            './' +
+              (file.startsWith('cloudflare/browser/')
+                ? relative('cloudflare', file)
+                : file),
+          ],
         }))
         .sort(
           (a, b) => Number(a.kind === 'browser') - Number(b.kind === 'browser'),

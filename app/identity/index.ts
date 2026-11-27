@@ -73,6 +73,7 @@ const emptyResponse = async () => new Response(null, { status: 204 })
 const namePattern = /^[\p{L}\p{N}_.@+-]{1,96}$/u
 const readTokenRoutes = new Set([
   '/_/api/v1/entries',
+  '/api/transfers/files',
   '/_/download',
   '/_/preview',
 ])
@@ -561,10 +562,16 @@ export class Identity {
     const route = new URL(request.url).pathname
     if (
       !['GET', 'HEAD'].includes(request.method) ||
-      !readTokenRoutes.has(route)
+      !(
+        readTokenRoutes.has(route) ||
+        /^\/api\/transfers\/files\/[A-Za-z0-9_-]+\/download$/.test(route)
+      )
     )
       throw forbidden()
-    const required = route === '/_/api/v1/entries' ? 'list' : 'read'
+    const required =
+      route === '/_/api/v1/entries' || route === '/api/transfers/files'
+        ? 'list'
+        : 'read'
     if (!token.scope.split(',').includes(required)) throw forbidden()
     this.tokenScopes.set(user, token.id)
     return { user, sessionId: null, csrf: '', bearer: true }

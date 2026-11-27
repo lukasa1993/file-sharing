@@ -16,7 +16,13 @@ import { createInstrumenter } from 'istanbul-lib-instrument'
 import { createCollector } from './merge.mjs'
 import { createContext } from 'istanbul-lib-report'
 import reports from 'istanbul-reports'
-import { sourceFiles, critical } from '../quality-sources.ts'
+import {
+  sourceFiles,
+  critical,
+  qualityDirectories,
+  qualityFiles,
+} from '../quality-sources.ts'
+import { observeWorkerd, prepareWorkerd } from './workerd.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const temp = await mkdtemp(join(tmpdir(), 'fileserver-istanbul-'))
@@ -43,19 +49,16 @@ async function execute(name, args, env = process.env) {
 }
 
 async function stage() {
-  for (const name of [
-    'app',
-    'public',
-    'scripts',
-    'tests',
-    'e2e.config.ts',
-    'server.ts',
-    'tsconfig.json',
-    'package.json',
-  ]) {
-    await cp(join(root, name), join(temp, name), { recursive: true })
+  for (const name of [...qualityDirectories, ...qualityFiles]) {
+    await cp(join(root, name), join(temp, name), {
+      recursive: true,
+      filter: (path) =>
+        !relative(root, path)
+          .split('/')
+          .some((part) => ['.e2e', '.wrangler', '.cloudflare'].includes(part)),
+    })
   }
-  for (const folder of ['scripts', 'tests']) {
+  for (const folder of qualityDirectories) {
     for await (const path of new Bun.Glob('**/*').scan({
       cwd: join(temp, folder),
       onlyFiles: true,
@@ -64,7 +67,7 @@ async function stage() {
       testInputs[name] = digest(await readFile(join(temp, name)))
     }
   }
-  for (const name of ['e2e.config.ts', 'tsconfig.json', 'package.json'])
+  for (const name of qualityFiles)
     testInputs[name] = digest(await readFile(join(temp, name)))
   await mkdir(raw)
   await symlink(join(root, 'node_modules'), join(temp, 'node_modules'), 'dir')
@@ -110,25 +113,33 @@ async function stage() {
   }
   // Hook registration belongs to the file's e2e collection scope, which changes
   // between files even when they share a test worker and module cache.
-  for await (const name of new Bun.Glob('**/*.e2e.ts').scan({
-    cwd: join(temp, 'tests'),
-  })) {
-    const file = join(temp, 'tests', name)
-    const helper = relative(
-      dirname(file),
-      join(temp, 'scripts/coverage/browser.mjs'),
-    )
-    const hooks =
-      'import {beforeEach as __coverageBefore, afterEach as __coverageAfter} from "@e2e-dev/web";\n' +
-      'import {startBrowserCoverage,finishBrowserCoverage} from ' +
-      JSON.stringify(helper) +
-      ';\n' +
-      '__coverageBefore(async ({browser}) => { await startBrowserCoverage(browser) });\n' +
-      '__coverageAfter(async ({browser}) => { await finishBrowserCoverage(browser,' +
-      JSON.stringify(raw) +
-      ') });\n'
-    await writeFile(file, hooks + (await readFile(file, 'utf8')))
+  for (const [folder, kind] of [
+    ['tests', 'browser'],
+    ['cloudflare/browser', 'cloudbrowser'],
+  ]) {
+    for await (const name of new Bun.Glob('**/*.e2e.ts').scan({
+      cwd: join(temp, folder),
+    })) {
+      const file = join(temp, folder, name)
+      const helper = relative(
+        dirname(file),
+        join(temp, 'scripts/coverage/browser.mjs'),
+      )
+      const hooks =
+        'import {beforeEach as __coverageBefore, afterEach as __coverageAfter} from "@e2e-dev/web";\n' +
+        'import {startBrowserCoverage,finishBrowserCoverage} from ' +
+        JSON.stringify(helper) +
+        ';\n' +
+        '__coverageBefore(async ({browser}) => { await startBrowserCoverage(browser) });\n' +
+        '__coverageAfter(async ({browser}) => { await finishBrowserCoverage(browser,' +
+        JSON.stringify(raw) +
+        ',' +
+        JSON.stringify(kind) +
+        ') });\n'
+      await writeFile(file, hooks + (await readFile(file, 'utf8')))
+    }
   }
+  await prepareWorkerd(temp)
 }
 
 async function report(nativeOnly = false) {
@@ -138,6 +149,8 @@ async function report(nativeOnly = false) {
   let completedNativeRunners = 0
   const observed = new Set(),
     browserFiles = new Set(),
+    cloudBrowserFiles = new Set(),
+    workerdFiles = new Set(),
     sources = {}
   for (const name of await readdir(raw)) {
     if (!name.endsWith('.json')) continue
@@ -154,6 +167,8 @@ async function report(nativeOnly = false) {
       collector.add(path, counts, name)
       observed.add(path)
       if (kind === 'browser') browserFiles.add(path)
+      if (kind === 'cloudbrowser') cloudBrowserFiles.add(path)
+      if (kind === 'workerd') workerdFiles.add(path)
     }
   }
   await mkdir(output, { recursive: true })
@@ -208,25 +223,41 @@ async function report(nativeOnly = false) {
       !browserFiles.has(path)
     )
       missing.push('browser: ' + path)
+    if (
+      (path.startsWith('cloudflare/assets/') ||
+        path === 'public/transfer-client.js') &&
+      !cloudBrowserFiles.has(path)
+    )
+      missing.push('Cloudflare browser: ' + path)
+    if (
+      path.startsWith('cloudflare/') &&
+      !path.startsWith('cloudflare/assets/') &&
+      !workerdFiles.has(path)
+    )
+      missing.push('workerd: ' + path)
   }
-  for (const kind of ['bun', 'server', 'browser'])
+  for (const kind of ['bun', 'server', 'browser', 'cloudbrowser', 'workerd'])
     if (!sources[kind]) missing.push('observation kind: ' + kind)
   if (!completedNativeRunners) missing.push('completed native test runner')
-  const browserReport = Bun.file(join(temp, '.e2e/report.json'))
-  let browserRun
-  if (await browserReport.exists()) {
-    const { run } = await browserReport.json()
-    browserRun = {
-      id: run.id,
-      status: run.status,
-      durationMs: run.durationMs,
-      summary: run.summary,
-      failed: run.results
-        .filter((result) => result.selected && result.status === 'failed')
-        .map((result) => ({ file: result.file, title: result.titlePath })),
-    }
-    if (!run.summary.executed) missing.push('browser test execution')
-  } else missing.push('browser run report')
+  async function readBrowserRun(folder) {
+    const browserReport = Bun.file(join(temp, folder, 'report.json'))
+    if (await browserReport.exists()) {
+      const { run } = await browserReport.json()
+      if (!run.summary.executed)
+        missing.push(folder + ': browser test execution')
+      return {
+        id: run.id,
+        status: run.status,
+        durationMs: run.durationMs,
+        summary: run.summary,
+        failed: run.results
+          .filter((result) => result.selected && result.status === 'failed')
+          .map((result) => ({ file: result.file, title: result.titlePath })),
+      }
+    } else missing.push(folder + ': browser run report')
+  }
+  const browserRun = await readBrowserRun('.e2e'),
+    cloudBrowserRun = await readBrowserRun('.e2e-cloud')
   const { lines, branches } = map.getCoverageSummary()
   console.log(
     `Combined Istanbul coverage: ${lines.covered}/${lines.total} lines (${lines.pct}%), ${branches.covered}/${branches.total} branches (${branches.pct}%), ${files.length} source files.`,
@@ -262,8 +293,11 @@ async function report(nativeOnly = false) {
         checkpointOnly,
         completedNativeRunners,
         browserRun,
+        cloudBrowserRun,
         observed: [...observed].sort(),
         browserFiles: [...browserFiles].sort(),
+        cloudBrowserFiles: [...cloudBrowserFiles].sort(),
+        workerdFiles: [...workerdFiles].sort(),
         missing,
         runFailures,
       },
@@ -284,6 +318,16 @@ try {
   if (process.env.FILESERVER_COVERAGE_DETERMINISTIC === '1')
     browserArgs.push('--exclude-tag', 'agent')
   await execute('Chromium', browserArgs)
+  await observeWorkerd(temp, raw, 'coverage')
+  await execute(
+    'Cloudflare Chromium',
+    ['scripts/cloud-fixture.ts', '--output', join(temp, '.e2e-cloud')],
+    {
+      ...process.env,
+      LSHARE_MINIO_CACHE:
+        process.env.LSHARE_MINIO_CACHE || join(root, '.cloudflare/tools'),
+    },
+  )
   process.exitCode = await report()
 } catch (error) {
   await writeFile(

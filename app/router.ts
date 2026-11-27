@@ -24,7 +24,10 @@ import {
   directoryPermissions,
 } from './identity/directory-permissions.ts'
 import { renderDirectoryPermissions } from './ui/directory-permissions.tsx'
-import type { UploadAccess } from './transfers/index.ts'
+import { BunTransferAdapter, bunUploadAccess } from './transfers/adapter.ts'
+import { ownerShareApi } from '../shared/shares.ts'
+import { BunShareAdapter } from './shares/adapter.ts'
+import { transferApi } from '../shared/transfers.ts'
 import {
   renderLogin,
   renderProviderRedirect,
@@ -64,6 +67,15 @@ const routes = route({
   archive: '/_/archive',
   uploads: '/_/uploads',
   upload: '/_/uploads/:id',
+  ownerShares: '/api/shares',
+  ownerShare: '/api/shares/:id',
+  transferFiles: '/api/transfers/files',
+  transferFile: '/api/transfers/files/:id',
+  transferDownload: '/api/transfers/files/:id/download',
+  transferUploads: '/api/transfers/uploads',
+  transferUpload: '/api/transfers/uploads/:id',
+  transferParts: '/api/transfers/uploads/:id/parts',
+  transferComplete: '/api/transfers/uploads/:id/complete',
   events: '/_/events',
   health: '/healthz',
   ready: '/readyz',
@@ -171,6 +183,7 @@ export async function appRouter(
         const publicPath = !url.pathname.startsWith('/_/')
         const needSession =
           request.method === 'GET' &&
+          !url.pathname.startsWith('/api/') &&
           (publicPath || !url.pathname.startsWith('/_/api/')) &&
           !['/_/download', '/_/preview', '/_/archive', '/_/events'].includes(
             url.pathname,
@@ -630,19 +643,29 @@ export async function appRouter(
       transferOptions(current(ctx)),
     )
   })
+  const ownerShares = (ctx: Endpoint) =>
+    ownerShareApi(ctx.request, new BunShareAdapter(s, current(ctx)))
+  router.get(routes.ownerShares, ownerShares)
+  router.post(routes.ownerShares, ownerShares)
+  router.delete(routes.ownerShare, ownerShares)
+  const commonTransfer = (ctx: Endpoint) =>
+    transferApi(
+      ctx.request,
+      new BunTransferAdapter(s, ctx.request, access(ctx)),
+    )
+  router.get(routes.transferFiles, commonTransfer)
+  router.delete(routes.transferFile, commonTransfer)
+  router.get(routes.transferDownload, commonTransfer)
+  router.post(routes.transferUploads, commonTransfer)
+  router.post(routes.transferParts, commonTransfer)
+  router.post(routes.transferComplete, commonTransfer)
+  router.delete(routes.transferUpload, commonTransfer)
   async function uploads(ctx: Endpoint, id?: string) {
-    const user = access(ctx).user,
-      alias = ctx.url.searchParams.get('share')
-    let actor: UploadAccess
-    if (alias) actor = await s.shares.uploadAccess(alias, access(ctx))
-    else {
-      if (!user) throw new AppError(401, 'Sign in to upload')
-      actor = {
-        ...transferOptions(user),
-        guard: ownerGuard(s, user),
-        getQuota: () => s.identity.quota(user.id),
-      }
-    }
+    const actor = await bunUploadAccess(
+      s,
+      access(ctx),
+      ctx.url.searchParams.get('share'),
+    )
     const response = await s.transfers.upload(ctx.request, actor, id)
     response.headers.set(
       'Fileserver-Max-Chunk-Bytes',

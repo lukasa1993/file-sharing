@@ -35,6 +35,7 @@ export type Share = {
   alias: string
   ownerId: string
   revision: number
+  createdAt?: number
   kind: ShareKind
   access: ShareAccess
   mode: ShareMode
@@ -224,6 +225,49 @@ export class ShareStore {
           .all(user.id)
     return rows.map((row) => this.summary(current, JSON.parse(row.data), row))
   }
+  ownedLinks(actor: User, id?: string) {
+    if (!this.identity.getUser(actor.id)) throw missing()
+    const sql = `SELECT s.*,h.at AS createdAt FROM shares s
+      LEFT JOIN share_alias_history h ON h.share=s.id AND h.revision=1
+      WHERE s.owner=?`
+    type OwnedRow = Row & { createdAt: string | null }
+    const rows = id
+      ? this.db
+          .query<OwnedRow, [string, string]>(sql + ' AND s.id=?')
+          .all(actor.id, id)
+      : this.db
+          .query<OwnedRow, [string]>(sql + ' ORDER BY s.alias')
+          .all(actor.id)
+    return rows.map((row) => {
+      const share: Share = JSON.parse(row.data)
+      const kind =
+        share.kind === 'upload'
+          ? 'request'
+          : share.targets.length !== 1
+            ? 'selection'
+            : share.targets[0]?.kind === 'file'
+              ? 'file'
+              : 'folder'
+      return {
+        share: this.summary(actor, share, row),
+        kind,
+        createdAt:
+          share.createdAt ?? (row.createdAt ? Date.parse(row.createdAt) : null),
+      } as const
+    })
+  }
+  revokeOwned(actor: User, id: string) {
+    if (!this.identity.getUser(actor.id)) throw missing()
+    this.db
+      .transaction(() => {
+        const result = this.db
+          .query('DELETE FROM shares WHERE id=? AND owner=?')
+          .run(id, actor.id)
+        if (!result.changes) throw missing()
+        this.audit(id, actor.id, 'revoke')
+      })
+      .immediate()
+  }
   private summary(actor: User, share: Share, row: Row) {
     const dto = asDto(share, row)
     const owner = this.identity.getUser(share.ownerId)
@@ -366,7 +410,12 @@ export class ShareStore {
   save(actor: User, value: unknown, id?: string): Promise<ShareDto> {
     return runTask(this.saveEffect(actor, value, id))
   }
-  saveEffect(actor: User, value: unknown, id?: string) {
+  saveEffect(
+    actor: User,
+    value: unknown,
+    id?: string,
+    requiredTargetKind?: Entry['kind'],
+  ) {
     const self = this
     return Effect.gen(function* () {
       const input = yield* syncTask(() => parseShareInput(value))
@@ -399,6 +448,11 @@ export class ShareStore {
             ownerId,
           )
         : old.targets
+      if (
+        requiredTargetKind &&
+        targets.some((target) => target.kind !== requiredTargetKind)
+      )
+        return yield* Effect.fail(bad('Choose a file to share.'))
       const exposing =
         !old ||
         old.access !== 'public' ||
@@ -462,6 +516,11 @@ export class ShareStore {
   ): ShareDto {
     const s: Share = {
       id: old?.id ?? randomUUID(),
+      ...(!old
+        ? { createdAt: this.clock.currentTimeMillisUnsafe() }
+        : old.createdAt === undefined
+          ? {}
+          : { createdAt: old.createdAt }),
       ...fields,
       revision: (old?.revision ?? 0) + 1,
       alias: validAlias(

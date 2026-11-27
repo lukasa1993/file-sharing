@@ -73,13 +73,22 @@ test('unresolved runtime and compilation failures fail the combined score gate',
 test('merging a complete shard rechecks the current test fingerprint', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'lshare-mutation-manifest-'))
   try {
-    for (const folder of ['app', 'public', 'scripts', 'tests'])
+    for (const folder of [
+      'app',
+      'public',
+      'shared',
+      'cloudflare',
+      'scripts',
+      'tests',
+    ])
       await mkdir(join(dir, folder))
     for (const file of [
       'server.ts',
       'bun.lock',
       'package.json',
       'tsconfig.json',
+      'tsconfig.cloudflare.json',
+      'wrangler.jsonc',
       'e2e.config.ts',
     ])
       await writeFile(join(dir, file), '{}')

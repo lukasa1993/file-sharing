@@ -24,7 +24,11 @@ export async function startBrowserCoverage(browser) {
   )
 }
 
-export async function finishBrowserCoverage(browser, directory) {
+export async function finishBrowserCoverage(
+  browser,
+  directory,
+  kind = 'browser',
+) {
   const snapshots = await browser.evaluate(() => {
     const prefix = globalThis.__fileserverPrefix
     if (location.origin === 'null' || !prefix) return []
@@ -35,7 +39,7 @@ export async function finishBrowserCoverage(browser, directory) {
   })
   for (const snapshot of snapshots) {
     await writeFile(
-      join(directory, 'browser-' + randomUUID() + '.json'),
+      join(directory, kind + '-' + randomUUID() + '.json'),
       JSON.stringify({ complete: true, files: snapshot }),
       { flag: 'wx', mode: 0o600 },
     )

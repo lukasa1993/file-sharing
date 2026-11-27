@@ -96,6 +96,7 @@ export async function boundedRequest(
 export function isPage(url: URL, request: Request) {
   return (
     !url.pathname.startsWith('/_/api/') &&
+    !url.pathname.startsWith('/api/') &&
     !url.pathname.startsWith('/_/uploads') &&
     (request.method === 'GET' || request.method === 'POST') &&
     (request.headers.get('accept') ?? '').includes('text/html')

@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { calculateMetrics } from 'mutation-testing-metrics'
-import { critical } from '../quality-sources.ts'
+import {
+  critical,
+  qualityFiles,
+  qualityDirectories,
+} from '../quality-sources.ts'
 
 export interface MutationReport {
   config: { mutate: string[] }
@@ -25,14 +29,8 @@ export async function mutationFingerprint(files: string[]) {
       ]),
     )
     .update(JSON.stringify(files))
-  const inputs = [
-    'server.ts',
-    'bun.lock',
-    'package.json',
-    'tsconfig.json',
-    'e2e.config.ts',
-  ]
-  for (const directory of ['app', 'public', 'scripts', 'tests']) {
+  const inputs = [...qualityFiles]
+  for (const directory of qualityDirectories) {
     for await (const path of new Bun.Glob('**/*').scan({
       cwd: directory,
       onlyFiles: true,
