@@ -69,3 +69,51 @@ test('unresolved runtime and compilation failures fail the combined score gate',
       }),
     ).toBe(1)
 })
+
+test('merging a complete shard rechecks the current test fingerprint', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'lshare-mutation-manifest-'))
+  try {
+    for (const folder of ['app', 'public', 'scripts', 'tests'])
+      await mkdir(join(dir, folder))
+    for (const file of [
+      'server.ts',
+      'bun.lock',
+      'package.json',
+      'tsconfig.json',
+      'e2e.config.ts',
+    ])
+      await writeFile(join(dir, file), '{}')
+    await writeFile(join(dir, 'app/example.ts'), 'true')
+    await writeFile(join(dir, 'tests/example.test.ts'), 'initial assertion')
+    const results = pathToFileURL(join(import.meta.dir, 'results.ts')).href
+    await writeFile(
+      join(dir, 'verify.ts'),
+      `import {mutationFingerprint, readVerifiedMutation} from ${JSON.stringify(results)}
+import {createHash} from 'node:crypto'
+const source='app/example.ts'
+const manifest={fingerprint:await mutationFingerprint([source]),modules:{[source]:{sha256:createHash('sha256').update('true').digest('hex'),ids:[]}}}
+await Bun.write('manifest.json',JSON.stringify(manifest))
+await Bun.write('report.json',JSON.stringify({config:{mutate:[source]},files:{}}))
+await readVerifiedMutation('report.json',new Set([source]))
+await Bun.write('tests/example.test.ts','changed assertion')
+try {
+  await readVerifiedMutation('report.json',new Set([source]))
+  process.exitCode=1
+} catch(error) {
+  if (!String(error).includes('fingerprint mismatch')) throw error
+}`,
+    )
+    const child = Bun.spawn([process.execPath, 'verify.ts'], {
+      cwd: dir,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    })
+    const [status, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stderr).text(),
+    ])
+    expect(status, stderr).toBe(0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}, 30000)

@@ -1,11 +1,11 @@
-import { readFile, rm, stat } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { rm, stat } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import ts from 'typescript'
 
 import { sourceFiles } from './quality-sources.ts'
 import {
+  mutationFingerprint,
   readVerifiedMutation,
   reviewMutation,
   type MutationReport,
@@ -264,42 +264,8 @@ async function mutation(all: boolean) {
 }
 
 async function runStryker(files: string[], shard = false) {
-  // A changed assertion, dependency, fixture, or collaborating module
-  // must invalidate cached kills and their coverage-based test selections.
-  const node = Bun.spawnSync(['node', '--version'])
-  if (node.exitCode !== 0) throw new Error('Node is required for Stryker.')
-  const hash = createHash('sha256')
-    .update(
-      JSON.stringify([
-        Bun.version,
-        node.stdout.toString().trim(),
-        process.platform,
-        process.arch,
-        process.env.E2E_BROWSER || 'chromium',
-      ]),
-    )
-    .update(JSON.stringify(files))
-  const inputs = [
-    'server.ts',
-    'bun.lock',
-    'package.json',
-    'tsconfig.json',
-    'e2e.config.ts',
-  ]
-  for (const directory of ['app', 'public', 'scripts', 'tests']) {
-    for await (const path of new Bun.Glob('**/*').scan({
-      cwd: directory,
-      onlyFiles: true,
-    }))
-      inputs.push(directory + '/' + path)
-  }
-  for (const path of inputs.sort())
-    hash
-      .update(path + '\0')
-      .update(await readFile(path))
-      .update('\0')
-  const incremental =
-    '.quality/mutation/incremental-' + hash.digest('hex') + '.json'
+  const fingerprint = await mutationFingerprint(files)
+  const incremental = '.quality/mutation/incremental-' + fingerprint + '.json'
   return await command(
     [
       'node',
@@ -310,6 +276,7 @@ async function runStryker(files: string[], shard = false) {
     {
       ...process.env,
       FILESERVER_MUTATION_FILES: JSON.stringify(files),
+      FILESERVER_MUTATION_FINGERPRINT: fingerprint,
       FILESERVER_MUTATION_INCREMENTAL: incremental,
       FILESERVER_MUTATION_SHARD: shard ? '1' : '0',
     },

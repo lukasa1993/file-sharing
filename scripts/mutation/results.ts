@@ -9,26 +9,72 @@ export interface MutationReport {
   files: Parameters<typeof calculateMetrics>[0]
 }
 
+export async function mutationFingerprint(files: string[]) {
+  // A changed assertion, dependency, fixture, or collaborating module
+  // must invalidate cached kills and their coverage-based test selections.
+  const node = Bun.spawnSync(['node', '--version'])
+  if (node.exitCode !== 0) throw new Error('Node is required for Stryker.')
+  const hash = createHash('sha256')
+    .update(
+      JSON.stringify([
+        Bun.version,
+        node.stdout.toString().trim(),
+        process.platform,
+        process.arch,
+        process.env.E2E_BROWSER || 'chromium',
+      ]),
+    )
+    .update(JSON.stringify(files))
+  const inputs = [
+    'server.ts',
+    'bun.lock',
+    'package.json',
+    'tsconfig.json',
+    'e2e.config.ts',
+  ]
+  for (const directory of ['app', 'public', 'scripts', 'tests']) {
+    for await (const path of new Bun.Glob('**/*').scan({
+      cwd: directory,
+      onlyFiles: true,
+    }))
+      inputs.push(directory + '/' + path)
+  }
+  for (const path of inputs.sort())
+    hash
+      .update(path + '\0')
+      .update(await readFile(path))
+      .update('\0')
+  return hash.digest('hex')
+}
+
 export async function readVerifiedMutation(
   reportFile: string,
   wanted: Set<string>,
 ) {
   const report: MutationReport = JSON.parse(await readFile(reportFile, 'utf8'))
-  const manifest: Record<string, { sha256: string; ids: string[] }> =
-    JSON.parse(
-      await readFile(join(dirname(reportFile), 'manifest.json'), 'utf8'),
+  const manifest: {
+    fingerprint: string
+    modules: Record<string, { sha256: string; ids: string[] }>
+  } = JSON.parse(
+    await readFile(join(dirname(reportFile), 'manifest.json'), 'utf8'),
+  )
+  if (
+    manifest.fingerprint !== (await mutationFingerprint(report.config.mutate))
+  )
+    throw new Error(
+      'Mutation test, source, tool or configuration fingerprint mismatch.',
     )
   const inputs = new Set(report.config.mutate)
   if (
     Object.keys(report.files).some((file) => !inputs.has(file)) ||
-    Object.keys(manifest).some((file) => !inputs.has(file))
+    Object.keys(manifest.modules).some((file) => !inputs.has(file))
   )
     throw new Error('Mutation report contains unexpected sources.')
   for (const file of report.config.mutate) {
     if (!wanted.delete(file))
       throw new Error('Unexpected or repeated mutation input: ' + file)
     const source = await readFile(file)
-    const expected = manifest[file]
+    const expected = manifest.modules[file]
     const entry = report.files[file]
     if (
       !expected ||

@@ -60,9 +60,16 @@ class MutationProgress {
       }
     }
     if (selected.length)
-      writeFileSync('.quality/mutation/manifest.json', JSON.stringify(inputs), {
-        mode: 0o600,
-      })
+      writeFileSync(
+        '.quality/mutation/manifest.json',
+        JSON.stringify({
+          fingerprint: process.env.FILESERVER_MUTATION_FINGERPRINT ?? null,
+          modules: inputs,
+        }),
+        {
+          mode: 0o600,
+        },
+      )
     writeFileSync(
       this.base + '.plan.json',
       JSON.stringify(
