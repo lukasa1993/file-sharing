@@ -1,0 +1,626 @@
+import { readdir } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { createRouter } from 'remix/router'
+import { route } from 'remix/routes'
+import { cop } from 'remix/middleware/cop'
+import { csp } from 'remix/middleware/csp'
+import { Stream } from 'effect'
+import {
+  actions,
+  AppError,
+  type Entry,
+  type ResourceRef,
+  type User,
+} from './contracts.ts'
+import { adminUser, data, go, mustUser, ownerGuard, localNext } from './http.ts'
+import { inspectFile } from './inspection/index.ts'
+import { requestRef, resource, selected } from './metadata.ts'
+import { fileOperation } from './operations.ts'
+import type { Services } from './runtime.ts'
+import type { Access } from './identity/index.ts'
+import type { UploadAccess } from './transfers/index.ts'
+import {
+  renderLogin,
+  renderFiles,
+  renderTrash,
+  renderAdmin,
+  renderAccount,
+  renderShares,
+} from './ui/index.tsx'
+import { buildUiAssets } from './ui/assets.ts'
+import { refUrl } from './ui/base.tsx'
+
+const routes = route({
+  home: '/',
+  login: '/login',
+  logout: '/logout',
+  files: '/_/files',
+  shares: '/_/shares',
+  trash: '/_/trash',
+  admin: '/_/admin',
+  account: '/_/account',
+  entries: '/_/api/v1/entries',
+  operations: '/_/api/v1/files/operations',
+  settings: '/_/api/v1/admin',
+  diagnostics: '/_/api/v1/admin/diagnostics',
+  profile: '/_/api/v1/account',
+  preferences: '/_/api/v1/preferences',
+  shareCollection: '/_/api/v1/shares',
+  shareItem: '/_/api/v1/shares/:id',
+  unlock: '/_/shares/:id/unlock',
+  download: '/_/download',
+  preview: '/_/preview',
+  inspect: '/_/inspect',
+  archive: '/_/archive',
+  uploads: '/_/uploads',
+  upload: '/_/uploads/:id',
+  events: '/_/events',
+  health: '/healthz',
+  ready: '/readyz',
+  assets: '/assets/:name.:extension',
+})
+type Endpoint = { request: Request; url: URL }
+const safe = new Set(['GET', 'HEAD', 'OPTIONS'])
+const reserved = new Set([
+  '_',
+  'admin',
+  'api',
+  'assets',
+  'login',
+  'logout',
+  'healthz',
+  'readyz',
+  'robots.txt',
+  'favicon.ico',
+  '.well-known',
+])
+export type RequestAudit = { peer?: string; actorId?: string }
+function orderEntries(entries: Entry[], sort: string) {
+  const strings = new Intl.Collator(undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+  const dir = sort.endsWith('-desc') ? -1 : 1,
+    field = sort.replace(/-desc$/, '')
+  return entries.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1
+    let difference = 0
+    if (field === 'size') difference = a.size - b.size
+    else if (field === 'mtime' || field === 'modifiedAt')
+      difference = a.modifiedAt.localeCompare(b.modifiedAt)
+    else if (field === 'type')
+      difference = strings.compare(
+        a.name.split('.').at(-1) || '',
+        b.name.split('.').at(-1) || '',
+      )
+    else difference = strings.compare(a.name, b.name)
+    return dir * difference || strings.compare(a.name, b.name)
+  })
+}
+export async function appRouter(
+  s: Services,
+  audit: WeakMap<Request, RequestAudit>,
+) {
+  const assets = await buildUiAssets()
+  const dir = new URL('../public/', import.meta.url)
+  for (const file of await readdir(dir, { withFileTypes: true })) {
+    if (file.isFile() && /^[a-z0-9-]+\.(css|js|svg|woff2)$/.test(file.name)) {
+      assets.set(file.name, Bun.file(fileURLToPath(new URL(file.name, dir))))
+    }
+  }
+  const sessions = new WeakMap<Request, Access>()
+  function access(ctx: Endpoint): Access {
+    const value = sessions.get(ctx.request)
+    if (!value) throw new AppError(500, 'Request context unavailable')
+    return value
+  }
+  const router = createRouter({
+    middleware: [
+      cop(),
+      csp({
+        policy: {
+          defaultSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+          baseUri: ["'none'"],
+          formAction: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'"],
+          imgSrc: ["'self'", 'blob:'],
+          mediaSrc: ["'self'"],
+          connectSrc: ["'self'"],
+        },
+      }),
+      async (ctx, next) => {
+        const { request, url } = ctx
+        if (
+          url.pathname.startsWith('/assets/') ||
+          url.pathname === '/healthz' ||
+          url.pathname === '/readyz'
+        )
+          return next()
+        const publicPath = !url.pathname.startsWith('/_/')
+        const needSession =
+          request.method === 'GET' &&
+          (publicPath || !url.pathname.startsWith('/_/api/')) &&
+          !['/_/download', '/_/preview', '/_/archive', '/_/events'].includes(
+            url.pathname,
+          )
+        const access = await s.identity.context(request, needSession)
+        sessions.set(request, access)
+        const record = audit.get(request)
+        if (record && access.user) record.actorId = access.user.id
+        if (!safe.has(request.method))
+          await s.identity.verifyWrite(request, access)
+        const response = await next()
+        if (access.setCookie && !response.headers.has('Set-Cookie'))
+          response.headers.append('Set-Cookie', access.setCookie)
+        return response
+      },
+    ],
+    defaultHandler: async (ctx) => {
+      const first = ctx.url.pathname.split('/')[1] || ''
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(first) || reserved.has(first))
+        throw new AppError(404, 'Page not found')
+      if (!['GET', 'HEAD'].includes(ctx.request.method))
+        throw new AppError(405, 'Method unavailable')
+      return s.shares.public(ctx.request, access(ctx))
+    },
+  })
+  const current = (ctx: Endpoint) => mustUser(access(ctx))
+  const brand = () => s.meta.value('brand', 'Fileserver')
+  function mounts(user: User) {
+    return s.config.mounts
+      .filter(
+        (m) =>
+          user.admin ||
+          s.identity.allowed(user, 'list', { mountId: m.id, segments: [] }),
+      )
+      .map((m) => ({
+        id: m.id,
+        label: s.meta.value('mount:' + m.id, m.label),
+        readOnly: m.readOnly,
+        available: s.fs.isEnabled(m.id),
+      }))
+  }
+  function shell(ctx: Endpoint) {
+    const user = current(ctx)
+    if (access(ctx).bearer)
+      throw new AppError(403, 'Open this page in a signed-in browser')
+    const home = s.identity.home(user)
+    return {
+      user,
+      csrf: access(ctx).csrf,
+      brand: brand(),
+      mounts: mounts(user),
+      ...(home ? { home } : {}),
+    }
+  }
+  const toFiles = (ref: ResourceRef) => refUrl('/_/files', ref)
+  router.get(routes.home, (ctx) => {
+    const user = access(ctx).user
+    if (!user) return go('/login')
+    const home = s.identity.home(user)
+    if (home) return go(toFiles(home))
+    return go('/_/files')
+  })
+  router.get(routes.login, (ctx) =>
+    access(ctx).user
+      ? go('/')
+      : renderLogin({
+          csrf: access(ctx).csrf,
+          next: localNext(ctx.url.searchParams.get('next')),
+          brand: brand(),
+        }),
+  )
+  router.post(routes.login, async (ctx) => {
+    const fields = await data(ctx.request)
+    if (
+      typeof fields.username !== 'string' ||
+      typeof fields.password !== 'string'
+    )
+      throw new AppError(400, 'Enter your username and password')
+    const next = localNext(fields.next)
+    try {
+      const cookie = await s.identity.login(
+        ctx.request,
+        access(ctx),
+        fields.username,
+        fields.password,
+        audit.get(ctx.request)?.peer,
+      )
+      const response = go(next)
+      response.headers.append('Set-Cookie', cookie)
+      return response
+    } catch (error) {
+      if (!(error instanceof AppError) || error.status !== 401) throw error
+      const page = await renderLogin({
+        csrf: access(ctx).csrf,
+        error: error.message,
+        next,
+        brand: brand(),
+      })
+      return new Response(page.body, { status: 401, headers: page.headers })
+    }
+  })
+  router.post(routes.logout, async (ctx) => {
+    const response = go('/login')
+    response.headers.append('Set-Cookie', await s.identity.logout(access(ctx)))
+    return response
+  })
+  router.get(routes.health, () => Response.json({ status: 'ok' }))
+  router.get(routes.ready, async () => {
+    const roots = s.config.mounts.filter((m) => s.fs.isEnabled(m.id))
+    const statuses = await Promise.allSettled(
+      roots.map((m) => s.fs.space(m.id)),
+    )
+    s.db.query('SELECT 1').get()
+    return statuses.some((x) => x.status === 'fulfilled')
+      ? Response.json({ status: 'ready' })
+      : Response.json({ status: 'unavailable' }, { status: 503 })
+  })
+  router.get(routes.assets, (ctx) => {
+    const asset = assets.get(`${ctx.params.name}.${ctx.params.extension}`)
+    if (!asset) throw new AppError(404, 'Asset not found')
+    return new Response(asset, {
+      headers: {
+        'Content-Type': asset.type || 'application/octet-stream',
+        'Cache-Control': 'public, max-age=0, must-revalidate',
+      },
+    })
+  })
+  router.get(routes.files, async (ctx) => {
+    const model = shell(ctx),
+      guard = ownerGuard(s, model.user)
+    const fallback = s.identity.home(model.user) || {
+      mountId: model.mounts[0]?.id || '',
+      segments: [],
+    }
+    const ref = ctx.url.searchParams.has('mount')
+      ? requestRef(ctx.url)
+      : fallback
+    if (!ref.mountId)
+      return renderFiles({
+        ...model,
+        ref,
+        entries: [],
+        permissions: [],
+        error: 'No storage folders have been assigned to your account.',
+      })
+    guard('list', ref)
+    const mount = s.config.mounts.find((m) => m.id === ref.mountId)
+    if (!mount) throw new AppError(404, 'Storage root unavailable')
+    const currentMount = {
+      id: mount.id,
+      label: s.meta.value('mount:' + mount.id, mount.label),
+      available: s.fs.isEnabled(mount.id),
+      readOnly: mount.readOnly,
+    }
+    const query = (ctx.url.searchParams.get('q') || '').trim().slice(0, 256)
+    const scope =
+      ctx.url.searchParams.get('scope') === 'tree' ? 'tree' : 'folder'
+    try {
+      let entries =
+        scope === 'tree' && query
+          ? await s.fs.search(ref, query, guard)
+          : await s.fs.list(ref, guard)
+      if (query && scope !== 'tree')
+        entries = entries.filter((e) =>
+          e.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+        )
+      const sort = s.meta.sortPreference(model.user.id)
+      orderEntries(entries, sort)
+      const size = 100,
+        page = Math.max(
+          1,
+          Math.min(
+            Number.parseInt(ctx.url.searchParams.get('page') || '1', 10) || 1,
+            Math.ceil(entries.length / size) || 1,
+          ),
+        )
+      const view = entries.slice((page - 1) * size, page * size).map((e) => ({
+        ...e,
+        permissions: actions.filter((a) =>
+          s.identity.allowed(model.user, a, e.ref),
+        ),
+      }))
+      s.meta.bookmark(model.user.id, 'recents', ref)
+      return renderFiles({
+        ...model,
+        currentMount,
+        ref,
+        entries: view,
+        scope,
+        query,
+        permissions: actions.filter((a) =>
+          s.identity.allowed(model.user, a, ref),
+        ),
+        pagination: { page, pages: Math.ceil(entries.length / size) },
+        space: await s.fs.space(ref.mountId),
+      })
+    } catch (error) {
+      if (!(error instanceof AppError) || error.status !== 503) throw error
+      const page = await renderFiles({
+        ...model,
+        ref,
+        entries: [],
+        permissions: [],
+        error:
+          'This storage root is unavailable. Contact the host to reconnect it.',
+      })
+      return new Response(page.body, { status: 503, headers: page.headers })
+    }
+  })
+  router.get(routes.entries, async (ctx) =>
+    Response.json(
+      await s.fs.list(requestRef(ctx.url), ownerGuard(s, current(ctx))),
+    ),
+  )
+  router.post(routes.operations, async (ctx) =>
+    fileOperation(
+      s.fs,
+      await data(ctx.request),
+      ownerGuard(s, current(ctx)),
+      ctx.request.signal,
+    ),
+  )
+  router.get(routes.trash, (ctx) =>
+    renderTrash({
+      ...shell(ctx),
+      items: s.fs.trash(ownerGuard(s, current(ctx))),
+    }),
+  )
+  router.get(routes.shares, (ctx) =>
+    renderShares({ ...shell(ctx), shares: s.shares.list(current(ctx)) }),
+  )
+  router.get(routes.account, (ctx) =>
+    renderAccount({ ...shell(ctx), data: s.identity.userData(current(ctx)) }),
+  )
+  router.post(routes.profile, async (ctx) =>
+    Response.json(await s.identity.self(current(ctx), await data(ctx.request))),
+  )
+  router.get(routes.preferences, (ctx) =>
+    Response.json(
+      s.meta.preferences(current(ctx).id, ownerGuard(s, current(ctx))),
+    ),
+  )
+  router.post(routes.preferences, async (ctx) =>
+    Response.json(
+      s.meta.updatePreferences(
+        current(ctx).id,
+        await data(ctx.request),
+        ownerGuard(s, current(ctx)),
+      ),
+    ),
+  )
+  const shareOwner = (ctx: Endpoint) =>
+    s.shares.owner(ctx.request, current(ctx))
+  router.get(routes.shareCollection, shareOwner)
+  router.post(routes.shareCollection, shareOwner)
+  router.get(routes.shareItem, shareOwner)
+  router.post(routes.shareItem, shareOwner)
+  router.patch(routes.shareItem, shareOwner)
+  router.delete(routes.shareItem, shareOwner)
+  router.post(routes.unlock, (ctx) => s.shares.public(ctx.request, access(ctx)))
+  const download = (ctx: Endpoint) =>
+    s.transfers.download(
+      ctx.request,
+      requestRef(ctx.url),
+      ownerGuard(s, current(ctx)),
+      { actor: current(ctx).id },
+    )
+  const preview = (ctx: Endpoint) =>
+    s.transfers.preview(
+      ctx.request,
+      requestRef(ctx.url),
+      ownerGuard(s, current(ctx)),
+      { actor: current(ctx).id },
+    )
+  router.get(routes.download, download)
+  router.head(routes.download, download)
+  router.get(routes.preview, preview)
+  router.head(routes.preview, preview)
+  const inspect = (ctx: Endpoint) =>
+    inspectFile(
+      ctx.request,
+      requestRef(ctx.url),
+      ownerGuard(s, current(ctx)),
+      s.fs,
+    )
+  router.get(routes.inspect, inspect)
+  router.head(routes.inspect, inspect)
+  router.put(routes.preview, (ctx) =>
+    s.transfers.editText(
+      ctx.request,
+      requestRef(ctx.url),
+      ownerGuard(s, current(ctx)),
+    ),
+  )
+  router.get(routes.archive, (ctx) => {
+    const refs = ctx.url.searchParams.getAll('ref').map((value) => {
+      try {
+        return resource(JSON.parse(value))
+      } catch {
+        throw new AppError(400, 'Invalid archive selection')
+      }
+    })
+    return s.transfers.archive(
+      ctx.request,
+      refs.length ? selected(refs) : [requestRef(ctx.url)],
+      ownerGuard(s, current(ctx)),
+      { actor: current(ctx).id },
+    )
+  })
+  async function uploads(ctx: Endpoint, id?: string) {
+    const user = access(ctx).user,
+      alias = ctx.url.searchParams.get('share')
+    let actor: UploadAccess
+    if (alias) actor = await s.shares.uploadAccess(alias, access(ctx))
+    else {
+      if (!user) throw new AppError(401, 'Sign in to upload')
+      actor = {
+        actor: user.id,
+        guard: ownerGuard(s, user),
+        getQuota: () => s.identity.quota(user.id),
+      }
+    }
+    const response = await s.transfers.upload(ctx.request, actor, id)
+    response.headers.set(
+      'Fileserver-Max-Chunk-Bytes',
+      String(s.config.transferLimits?.maxChunkBytes ?? 16 * 1024 * 1024),
+    )
+    return response
+  }
+  router.options(routes.uploads, (ctx) => uploads(ctx))
+  router.post(routes.uploads, (ctx) => uploads(ctx))
+  router.options(routes.upload, (ctx) => uploads(ctx, ctx.params.id))
+  router.head(routes.upload, (ctx) => uploads(ctx, ctx.params.id))
+  router.patch(routes.upload, (ctx) => uploads(ctx, ctx.params.id))
+  router.delete(routes.upload, (ctx) => uploads(ctx, ctx.params.id))
+  router.get(routes.events, (ctx) => {
+    const user = current(ctx)
+    const stream = Stream.fromPubSub(s.events).pipe(
+      Stream.takeWhile(() => s.identity.isCurrent(user)),
+      Stream.map((items) => {
+        const admin = s.identity.getUser(user.id)?.admin
+        return (
+          'event: transfers\ndata: ' +
+          JSON.stringify(items.filter((t) => admin || t.actor === user.id)) +
+          '\n\n'
+        )
+      }),
+      Stream.encodeText,
+      Stream.toReadableStream,
+    )
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-store',
+        'X-Accel-Buffering': 'no',
+      },
+    })
+  })
+  router.get(routes.admin, async (ctx) => {
+    const user = adminUser(s, access(ctx))
+    const states = await Promise.all(
+      mounts(user).map(async (mount) => {
+        try {
+          return { ...mount, ...(await s.fs.space(mount.id)), available: true }
+        } catch (error) {
+          if (!(error instanceof AppError) || error.status !== 503) throw error
+          return { ...mount, available: false }
+        }
+      }),
+    )
+    return renderAdmin({
+      ...shell(ctx),
+      data: {
+        ...s.identity.adminData(user),
+        mounts: states,
+        transfers: s.transfers.active(),
+        activity: s.meta.activity(),
+        settings: {
+          brand: brand(),
+          trashRetentionDays: s.meta.value('trashRetentionDays', '30'),
+        },
+      },
+    })
+  })
+  router.get(routes.diagnostics, (ctx) => {
+    adminUser(s, access(ctx))
+    const active = s.transfers.active()
+    return Response.json(
+      {
+        bun: Bun.version,
+        platform: process.platform,
+        architecture: process.arch,
+        uptimeSeconds: Math.floor(process.uptime()),
+        residentBytes: process.memoryUsage.rss(),
+        counters: s.counters(),
+        activeTransfers: active.length,
+        transferBytesPerSecond: active.reduce(
+          (sum, transfer) => sum + transfer.bytesPerSecond,
+          0,
+        ),
+      },
+      {
+        headers: {
+          'Content-Disposition':
+            'attachment; filename="fileserver-diagnostics.json"',
+        },
+      },
+    )
+  })
+  router.post(routes.settings, async (ctx) => {
+    const user = adminUser(s, access(ctx)),
+      fields = await data(ctx.request)
+    switch (fields.action) {
+      case 'cancelTransfer':
+        if (typeof fields.id !== 'string' || !s.transfers.cancel(fields.id))
+          throw new AppError(404, 'Transfer finished or unavailable')
+        break
+      case 'setMount': {
+        const id = fields.mountId
+        if (typeof id !== 'string' || !s.config.mounts.some((m) => m.id === id))
+          throw new AppError(400, 'Unknown storage root')
+        if (
+          fields.label !== undefined &&
+          (typeof fields.label !== 'string' ||
+            !fields.label.trim() ||
+            fields.label.length > 128)
+        )
+          throw new AppError(400, 'Invalid storage label')
+        if (fields.enabled !== undefined && typeof fields.enabled !== 'boolean')
+          throw new AppError(400, 'Invalid storage state')
+        if (fields.retentionDays !== undefined) {
+          const days = Number(fields.retentionDays)
+          if (
+            fields.retentionDays !== null &&
+            (!Number.isInteger(days) || days < 1 || days > 3650)
+          )
+            throw new AppError(400, 'Invalid retention period')
+          s.fs.setTrashRetention(
+            id,
+            fields.retentionDays === null ? null : days * 86400000,
+          )
+        }
+        if (typeof fields.enabled === 'boolean')
+          s.fs.setEnabled(id, fields.enabled)
+        if (typeof fields.label === 'string')
+          s.meta.set('mount:' + id, fields.label.trim())
+        break
+      }
+      case 'setSettings': {
+        const days = Number(
+          fields.trashRetentionDays ?? s.meta.value('trashRetentionDays', '30'),
+        )
+        if (!Number.isInteger(days) || days < 1 || days > 3650)
+          throw new AppError(400, 'Retention must be 1 to 3650 days')
+        if (
+          fields.brand !== undefined &&
+          (typeof fields.brand !== 'string' ||
+            !fields.brand.trim() ||
+            fields.brand.length > 60)
+        )
+          throw new AppError(400, 'Invalid display name')
+        if (typeof fields.brand === 'string')
+          s.meta.set('brand', fields.brand.trim())
+        s.meta.set('trashRetentionDays', String(days))
+        break
+      }
+      default:
+        if (fields.action === 'setHome' && typeof fields.path === 'string') {
+          const ref = resource({
+            mountId: fields.mountId,
+            segments: fields.path.split('/').filter(Boolean),
+          })
+          const entry = await s.fs.stat(ref, ownerGuard(s, user))
+          if (entry.kind !== 'directory')
+            throw new AppError(400, 'Select an existing home directory')
+        }
+        await s.identity.manage(user, fields)
+    }
+    return Response.json({ ok: true })
+  })
+  return router
+}

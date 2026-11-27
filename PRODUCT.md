@@ -39,7 +39,7 @@ Large transfers are a core use case. The release target includes files over 100 
 
 ## Stack
 
-One integrated Remix 3 application using TypeScript/TSX and native CSS, with one Bun process, one Linux container, and one HTTP port. Direct application packages are limited to the official Remix ecosystem. Bun supplies SQLite and runtime services. Administrators provision local username/password accounts and groups. Permission checks apply to files, previews, transfers, and shares, including after the owner's access changes.
+One integrated Remix 3 application using TypeScript/TSX and native CSS, with one Bun process, one Linux container, and one HTTP port. The official Remix ecosystem supplies the web framework. Effect 4 supplies server-side service composition, resource lifetimes, and typed failures. Bun supplies SQLite and runtime services. Administrators provision local username/password accounts and groups. Permission checks apply to files, previews, transfers, and shares, including after the owner's access changes.
 
 ## Accessibility & Inclusion
 

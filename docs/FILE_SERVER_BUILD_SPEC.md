@@ -5,6 +5,8 @@
 **Example public origin:** `https://dl.lnh.ge`.  
 **Working name:** `fileserver` (branding configurable; no product name selected).
 
+The [Effect architecture addendum](EFFECT_SPEC.md) governs server-side composition, exceptions to the dependency policy, testing, and quality gates wherever it supersedes this document.
+
 ## 0. Instructions to Codex and architectural decisions
 
 Build a polished private file-sharing service for friends. It should feel like a modern native file manager, preserve ordinary files and folders on disk, and serve clean, short download URLs. It is not an object-storage gateway, sync platform, or generic enterprise cloud suite.
@@ -13,7 +15,7 @@ Build a polished private file-sharing service for friends. It should feel like a
 
 - One integrated Remix 3 full-stack application, one repository, one package, one Bun server process, one Docker image/container, one listening HTTP port. Browser-side JavaScript is part of the same application; there is no separate SPA project, API deployment, or second server.
 - TypeScript/TSX and native CSS. Remix native components, routing, controllers, data, auth, sessions, middleware, assets and validation. Do not use React, React Router, Remix v2 conventions, Next.js, Express, Vite, Tailwind, Drizzle, Better Auth or a third-party upload server.
-- Zero direct third-party application package dependencies outside the official Remix ecosystem. Use `remix` and, where warranted, independently pinned official `@remix-run/ui`. Bun provides the runtime, SQLite, hashing, streams, build/tooling and tests. Official packages can have transitive dependencies; zero dependencies does not mean an empty dependency tree. Do not introduce another npm package, native addon, executable or service without an explicit owner decision. Build-only first-party type definitions may be approved if Bun/Remix requires them; record any tooling exception.
+- The approved direct production dependencies are official Remix packages and Effect core. Bun provides the runtime, SQLite, hashing, streams and native tests. The architecture addendum defines approved development tooling. Additional dependencies, native addons, executables or services require an explicit owner decision.
 - Real filesystem is the source of truth. Existing folders can be mounted and browsed without importing files. Completed uploads must be ordinary named files in their intended folders, immediately accessible through the OS and other trusted applications. SQLite is for application metadata, not file bytes or a mandatory file catalog.
 - Native browser downloads, resumable uploads and downloads, predictable short root-level URLs, modern accessible UI and strong security are core functionality.
 - No passkeys or TOTP. Local username/password login is the initial authentication method. No public self-registration or external identity service by default.
@@ -194,17 +196,19 @@ Sections 1–10 define the product requirements. Sections 11–17 define contrac
 
 ### 11.1 Version and dependency policy
 
-- Proposed initial pins: `remix@3.3.0` (official docs show this version), Bun `1.4.5` (official release 2026-11-19, includes security fixes). Before implementation, verify actual registry availability, integrity, engine constraints, release/security notices, Linux base-image tags and resolved exports. If there is a newer security-fixed compatible patch, record an ADR and repin before the foundation merge. Commit `bun.lock`; never depend on `latest`, floating git refs or unpinned ranges in production. Pin the verified Docker image tag/digest and independently resolved `@remix-run/ui` version.
+- The implementation pins `remix@3.3.0`, `effect@4.1.7`, and Bun `1.4.5`. The repository includes `bun.lock` and the Linux base image digest. Check release and security notices, registry integrity, engine requirements, and resolved exports when updating a pin.
 - `@remix-run/ui` is official but currently explicitly unstable and versioned separately. Use only documented primitives, optionally wrap them locally for controlled upgrades. Use native semantic HTML when a primitive is absent; no imported React UI kits. Do not invent an exact UI version without registry verification.
 - Verify the official starter with Bun and retain official Remix agent skill (`.agents/skills/remix`, when included/available). Use `remix/component` JSX runtime, not React. Bun has native `bun check`, `bun fmt`, `bun lint`, `bun test` in the documented runtime generation; confirm command flags on pinned runtime. Pick `bun:test` as default; Remix Test is available but not mandatory. No redundant test/build runner. Use local Chrome/Firefox manual checks or Bun.WebView where supported; it is experimental and needs a browser installed on Linux, not a production dependency.
 - Dependency allowlist check: package.json direct deps only approved official packages; review dev deps too. Transitive dependencies of Remix are allowed and locked, not hand-waved away. No CDN scripts/fonts or runtime network dependency for normal UI. Run `bun install --frozen-lockfile`, dependency audit, and review all security findings.
 
-### 11.2 API mapping (official documentation verified; actual runtime tests pending)
+### 11.2 API mapping
+
+The table records the intended API choices. The [implementation evidence](implementation-status.md) records what has run on the pinned stack.
 
 | Need | Preferred documented API | What we own / must test |
 |---|---|---|
 | Full stack and routing | `remix/router`, `remix/routes`, `createRouter`, `router.fetch` | Route ordering, HEAD behavior, catch-all aliases, typed context |
-| HTTP runtime | `Bun.serve({ fetch })` | Origin normalization, peer address, abort, timeouts, body limits |
+| HTTP runtime | Bun `node:http` with `remix/node-fetch-server` | Origin normalization, peer address, abort, timeouts, body limits and content length on the wire |
 | UI | `remix/component`, `remix/component/server`, `remix/middleware/render` | SSR, hydration, native download bypass, UI state; closure pattern |
 | UI primitives | `@remix-run/ui/*` | Pin unstable official release; test behavior/accessibility |
 | Assets | `remix/assets`, `remix/middleware/static` | Production asset mapping and cache; static only for app-owned files |
@@ -448,7 +452,7 @@ Workstreams B–O can work concurrently after G0 using frozen interfaces and exp
 ```text
 Read docs/FILE_SERVER_BUILD_SPEC.md, PRODUCT.md, AGENTS.md, app/contracts/* and accepted docs/adr/*.
 You own workstream <ID> in §14. Work only in your assigned paths and tests.
-Use Remix 3.3.0 + pinned Bun 1.4.5 (or coordinator-approved security pin), native APIs and official Remix packages. No new dependency or separate app/process. Do not assume Remix v2/React APIs. Verify installed exports/types against official docs and record any gaps.
+Use Remix 3.3.0, Bun 1.4.5 and Effect 4.1.7, with official Remix APIs and the application-scoped Effect runtime. Coordinate dependency changes. Verify installed exports and types against the published APIs and record any gaps.
 Consume frozen contracts; if blocked, propose an interface change, do not silently change shared files. Use test-only mocks while waiting for other branches. No insecure production stubs. Never touch real user data, production domain or secrets.
 Implement the P0, P1, and P2 requirements owned by this workstream in dependency order. Test success, failure, and authorization paths for each enabled feature. Run bun check, bun test, and applicable HTTP/Linux tests. Report exact results, changed files, dependencies, and unresolved gates. Document evidence for each fallback or blocked capability.
 ```

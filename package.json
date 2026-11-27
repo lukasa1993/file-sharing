@@ -1,0 +1,48 @@
+{
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@ai-sdk/openai": "4.0.125",
+    "@e2e-dev/core": "0.25.0",
+    "@e2e-dev/web": "0.17.0",
+    "@effect/language-service": "0.87.5",
+    "@stryker-mutator/core": "10.1.1",
+    "@types/bun": "1.4.5",
+    "ai": "7.0.183",
+    "e2e": "0.25.0",
+    "typescript": "6.0.3",
+    "zod": "4.6.7"
+  },
+  "scripts": {
+    "test:e2e": "e2e run",
+    "dev": "bun run --watch server.ts",
+    "start": "bun run server.ts",
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "effect:check": "effect-language-service diagnostics --project tsconfig.json --severity error",
+    "lint": "bun scripts/quality.ts lint",
+    "format": "bun fmt --no-semi --single-quote app server.ts public scripts tests e2e.config.ts",
+    "format:check": "bun fmt --check --no-semi --single-quote app server.ts public scripts tests e2e.config.ts",
+    "test": "bun test tests",
+    "test:unit": "bun test tests/*.test.ts",
+    "test:integration": "bun test tests/integration",
+    "test:security": "bun test tests/security",
+    "test:performance": "bun test tests/performance",
+    "coverage": "bun scripts/quality.ts coverage",
+    "mutation": "bun scripts/quality.ts mutation",
+    "mutation:all": "bun scripts/quality.ts mutation-all",
+    "audit": "bun audit --audit-level=high",
+    "quality": "bun scripts/quality.ts quality",
+    "release:check": "bun scripts/quality.ts release",
+    "ops": "bun scripts/ops.ts",
+    "test:e2e:fixture": "bun scripts/e2e.ts",
+    "effect:editor": "bun scripts/effect-editor-check.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.7",
+    "remix": "3.3.0"
+  },
+  "name": "fileserver",
+  "version": "0.1.0",
+  "packageManager": "bun@1.4.5"
+}

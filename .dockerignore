@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!package.json
+!bun.lock
+!tsconfig.json
+!server.ts
+!app/
+!app/**
+!public/
+!public/**
+!scripts/
+!scripts/ops.ts
+!scripts/build.ts

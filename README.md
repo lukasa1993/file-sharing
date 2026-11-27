@@ -1,0 +1,26 @@
+# Fileserver
+
+Fileserver shares ordinary files from existing storage roots. An owner can create a short download link, share selected items, or request uploads into a folder. Recipients can use the link in a browser. Files remain accessible to trusted applications on the host.
+
+## Local development
+
+Use Bun 1.4.5 on Linux. Initialize disposable storage outside the checkout:
+
+```sh
+bun install --frozen-lockfile
+bun run ops init /tmp/fileserver-dev owner
+export CONFIG_FILE=/tmp/fileserver-dev/config/mounts.json
+export DATA_DIR=/tmp/fileserver-dev/data
+export SESSION_SECRET_FILE=/tmp/fileserver-dev/config/session.key
+export BOOTSTRAP_FILE=/tmp/fileserver-dev/config/bootstrap.json
+export PUBLIC_ORIGIN=http://127.0.0.1:8080
+bun run dev
+```
+
+Open the loopback address and sign in with the credentials in the private bootstrap file. Place files in the initialized storage directory or configure an existing mount. Mount identity markers, backup and restore, production container settings and the supported external-writer model are described in the [operator guide](docs/operations.md).
+
+## Validation
+
+`bun run quality` runs development validation. `bun run release:check` adds the expensive checks. `bun run test:e2e:fixture` starts a disposable real server and runs the headless browser suite. Agent steps need the configured ChatGPT sign-in. See the [browser test guide](tests/README.md).
+
+The [specification](SPEC.md) ties the user workflows to the implementation requirements. See [architecture and release evidence](docs/implementation-status.md) for supported behaviors, verification results, and open gates.

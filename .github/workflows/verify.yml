@@ -1,0 +1,146 @@
+name: Verify file server
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Build production image
+        run: docker build --tag fileserver:check .
+      - name: Verify runtime dependency allowlist
+        run: bun -e 'for (const name of Object.keys((await Bun.file("package.json").json()).dependencies ?? {})) if (name !== "remix" && name !== "effect" && name !== "@remix-run/ui") throw Error(name)'
+      - name: Run native tests
+        run: bun test
+      - name: Check the production container and restart
+        run: bash scripts/container-smoke.sh
+      - name: Install browser
+        if: matrix.runner == 'ubuntu-24.04'
+        run: bun run e2e-web install chromium --with-deps
+      - name: Exercise public web entry
+        if: matrix.runner == 'ubuntu-24.04'
+        run: bun scripts/e2e.ts tests/example.e2e.ts
+
+  mutation-plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      scope: ${{ steps.plan.outputs.scope }}
+      base: ${{ steps.plan.outputs.base }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.5
+      - run: bun install --frozen-lockfile
+      - name: Partition whole production modules
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            export MUTATION_BASE="$BASE_SHA"
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            export MUTATION_BASE="$(git rev-parse HEAD^)"
+          else
+            export MUTATION_BASE="$(git hash-object -w -t tree /dev/null)"
+          fi
+          case "$EVENT_NAME" in schedule|workflow_dispatch) scope=all ;; *) scope=changed ;; esac
+          echo "matrix=$(bun scripts/quality.ts mutation-matrix "$scope")" >> "$GITHUB_OUTPUT"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "base=$MUTATION_BASE" >> "$GITHUB_OUTPUT"
+
+  mutations:
+    needs: mutation-plan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: bun install --frozen-lockfile
+      - name: Reuse completed checks for identical sources and tests
+        if: matrix.files[0] != null
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .quality/mutation/incremental-*.json
+          key: stryker-bun1.4.5-${{ matrix.index }}-${{ needs.mutation-plan.outputs.scope }}-${{ hashFiles('app/**', 'public/**', 'scripts/**', 'tests/**', 'server.ts', 'bun.lock', 'package.json', 'tsconfig.json') }}
+      - name: Execute each mutant on its full correctness suite
+        env:
+          MUTATION_BASE: ${{ needs.mutation-plan.outputs.base }}
+          SCOPE: ${{ needs.mutation-plan.outputs.scope }}
+          SHARD: ${{ matrix.index }}
+        run: bun scripts/quality.ts mutation-shard "$SHARD" "$SCOPE"
+      - name: Preserve the Stryker report
+        if: matrix.files[0] != null
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mutation-${{ matrix.index }}
+          path: .quality/mutation/report.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  quality:
+    needs: [mutation-plan, mutations]
+    runs-on: ubuntu-24.04
+    env:
+      MUTATION_BASE: ${{ needs.mutation-plan.outputs.base }}
+      FILESERVER_MUTATION_REPORTS: .quality/shards
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: mutation-*
+          path: .quality/shards
+      - name: Verify development gates and combined mutation score
+        if: needs.mutation-plan.outputs.scope == 'changed'
+        run: bun run quality
+      - name: Install browser for release certification
+        if: needs.mutation-plan.outputs.scope == 'all'
+        run: bun run e2e-web install chromium --with-deps
+      - name: Verify release gates and combined mutation score
+        if: needs.mutation-plan.outputs.scope == 'all'
+        run: bun run release:check
