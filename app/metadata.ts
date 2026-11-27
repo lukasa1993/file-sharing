@@ -123,21 +123,22 @@ export class Metadata {
         .run(user, category, user, category)
     })()
   }
-  sortPreference(user: string) {
-    return (
-      this.db
-        .query<{ value: string }, [string]>(
-          "SELECT value FROM user_preferences WHERE user_id=? AND name='sort'",
-        )
-        .get(user)?.value ?? 'name'
-    )
-  }
-  preferences(user: string, guard: Guard) {
-    const settings = this.db
+  displayPreferences(user: string) {
+    const rows = this.db
       .query<{ name: string; value: string }, [string]>(
         'SELECT name,value FROM user_preferences WHERE user_id=?',
       )
       .all(user)
+    const settings = Object.fromEntries(
+      rows.map((row) => [row.name, row.value]),
+    )
+    return {
+      sort: settings.sort ?? 'name',
+      theme: settings.theme ?? 'system',
+      view: settings.view ?? 'list',
+    }
+  }
+  preferences(user: string, guard: Guard) {
     const rows = this.db
       .query<{ category: string; ref: string }, [string]>(
         'SELECT category,ref FROM bookmarks WHERE user_id=? ORDER BY touched DESC, rowid DESC',
@@ -157,7 +158,7 @@ export class Metadata {
       ;(row.category === 'favorites' ? favorites : recents).push(ref)
     }
     return {
-      ...Object.fromEntries(settings.map((row) => [row.name, row.value])),
+      ...this.displayPreferences(user),
       favorites,
       recents,
     }

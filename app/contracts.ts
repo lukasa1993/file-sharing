@@ -1,4 +1,6 @@
 export type User = { id: string; username: string; admin: boolean }
+export const defaultBrand = 'lshare'
+
 export type ResourceRef = { mountId: string; segments: string[] }
 export type Action =
   | 'list'
@@ -49,6 +51,7 @@ export type AppConfig = {
   publicOrigin: string
   sessionSecret: string
   bootstrapFile?: string
+  brandIcon?: Uint8Array
   mounts: Mount[]
   privateLocations?: readonly {
     device: string

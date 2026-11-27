@@ -13,7 +13,7 @@ import { ActivityRegistry, chunks } from '../../app/transfers/streams'
 test('concurrent native transfers retain bytes and bound process memory, including reads above 100 GiB', async () => {
   const storage = await mkdtemp(join(tmpdir(), 'fileserver-perf-'))
   const db = new Database(':memory:')
-  const jobs = new ActivityRegistry({})
+  const jobs = new ActivityRegistry()
   const largeOffset = 101 * 1024 ** 3
   const mountId = 'bench'
   const large = 'sparse.bin'

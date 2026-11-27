@@ -636,3 +636,43 @@ test('uses the current administrator role for ownership changes and the manageme
   users.delete(admin.id)
   expect(() => service.list(admin)).toThrow()
 })
+
+test('recipient pages use the chosen site name across listings, landing pages and password retries', async () => {
+  const { service } = fixture()
+  const brand = 'Archive Office'
+  const make = (alias: string, fields: Record<string, unknown>) =>
+    service.save(owner, { ...createInput, alias, ...fields })
+  const protectedFile = await make('protected', {
+    access: 'password',
+    password: 'sample-only',
+  })
+  await make('landing', { mode: 'landing' })
+  await make('folder', { targets: [folder] })
+  await make('collection', { targets: [ref, selection] })
+  await make('inbox', { targets: [folder], kind: 'upload' })
+  for (const alias of [
+    'protected',
+    'landing',
+    'folder',
+    'collection',
+    'inbox',
+  ]) {
+    const page = await service.public(link(alias), recipient, brand)
+    expect(await page.text()).toContain(brand)
+  }
+  const retry = new Request(
+    'http://localhost/_/shares/' + protectedFile.id + '/unlock',
+    {
+      method: 'POST',
+      body: new URLSearchParams({
+        password: 'incorrect',
+        returnTo: '/protected?download=1',
+      }),
+    },
+  )
+  const response = await service.public(retry, recipient, brand)
+  expect(response.status).toBe(403)
+  const text = await response.text()
+  expect(text).toContain(brand)
+  expect(text).toContain('/protected?download=1')
+})

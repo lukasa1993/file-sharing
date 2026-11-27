@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit } from 'effect'
-import { AppError, type AppConfig } from './contracts.ts'
+import { AppError, defaultBrand, type AppConfig } from './contracts.ts'
 import { boundedRequest, errorBody, go, isPage } from './http.ts'
 import { applicationServices, createRuntime } from './runtime.ts'
 import { appRouter, type RequestAudit } from './router.ts'
@@ -73,7 +73,11 @@ export async function createApp(config: AppConfig) {
           '/login?' + new URLSearchParams({ next: url.pathname + url.search }),
         )
       } else if (isPage(url, incoming))
-        response = await renderError({ status, message })
+        response = await renderError({
+          status,
+          message,
+          brand: services.meta.value('brand', defaultBrand),
+        })
       else
         response = Response.json(
           { error: { code: 'HTTP_' + status, message, requestId: id } },

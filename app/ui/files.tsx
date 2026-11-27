@@ -25,18 +25,56 @@ export type ShareView = {
   expiresAt?: number | string | null
   maxBytes?: number | null
   maxDownloads?: number | null
+  bytesPerSecond?: number | null
+  latestAtPath?: boolean
   ownerId?: string
   targets: ResourceRef[]
   broken?: boolean
   status?: string
 }
-export function shareEditor(csrf: string) {
+export function shareEditor(csrf: string, mounts: MountView[]) {
   return dialog(
     'share-editor',
     'Share files',
     <form id="share-form" method="post" action="/_/api/v1/shares">
       {csrfField(csrf)}
       <p class="selection-summary" data-share-summary></p>
+      <div data-target-editor hidden>
+        <label class="check-note">
+          <input type="checkbox" name="retarget" />
+          Change or reconfirm shared items
+        </label>
+        <fieldset data-target-fields hidden disabled>
+          <legend>Shared items</legend>
+          <div data-target-list></div>
+          <template data-target-template>
+            <div data-target-row>
+              <label>
+                Storage root
+                <select data-target-mount required>
+                  {mounts.map((mount) => (
+                    <option value={mount.id}>{mount.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Path in storage
+                <input
+                  data-target-path
+                  required
+                  placeholder="/folder/file.txt"
+                />
+              </label>
+              <button type="button" data-target-remove>
+                Remove item
+              </button>
+            </div>
+          </template>
+          <button type="button" data-target-add>
+            Add item
+          </button>
+        </fieldset>
+      </div>
       <label>
         Link address
         <span class="input-prefix">
@@ -97,16 +135,35 @@ export function shareEditor(csrf: string) {
               placeholder="Unlimited"
             />
           </label>
+          <label data-rate-field>
+            Download bandwidth (KiB/s)
+            <input
+              type="number"
+              min={1 / 1024}
+              step="any"
+              name="bandwidthKiB"
+              placeholder="Unlimited"
+            />
+          </label>
           <label data-cap-field hidden>
             Total upload limit (MiB)
             <input
               type="number"
-              min="1"
+              min={1 / 1048576}
+              step="any"
               name="maxMiB"
               placeholder="Unlimited"
             />
           </label>
         </div>
+        <p class="form-hint" data-lease-help>
+          Each browser uses one download lease per file version or archive.
+          Matching retries and byte ranges reuse that lease for one hour.
+        </p>
+        <label class="check-note" data-latest-field>
+          <input type="checkbox" name="latestAtPath" />
+          Share the latest version at this path, including replacement files.
+        </label>
       </details>
       <p role="alert" data-form-error hidden></p>
       <div class="dialog-actions">
@@ -232,13 +289,22 @@ function breadcrumbs(page: FilesPage, mountLabel: string) {
 export function uploadInputs() {
   return (
     <>
-      <input data-upload-files type="file" multiple hidden />
+      <input
+        data-upload-files
+        aria-label="Choose files to upload"
+        type="file"
+        multiple
+        hidden
+      />
       <input data-upload-directory type="file" multiple hidden />
     </>
   )
 }
 export async function renderFiles(page: FilesPage) {
   const { pagination } = page
+  const sort = page.sort === 'modifiedAt' ? 'mtime' : (page.sort ?? 'name')
+  const sortField = sort.replace(/-desc$/, '')
+  const descending = sort.endsWith('-desc')
   const mount =
     page.currentMount ?? page.mounts.find((m) => m.id === page.ref.mountId)
   const label = mount?.label || 'Storage'
@@ -351,7 +417,7 @@ export async function renderFiles(page: FilesPage) {
                   type="button"
                   data-view="list"
                   class="icon-btn"
-                  aria-pressed="true"
+                  aria-pressed={page.view !== 'grid'}
                   aria-label="List view"
                 >
                   {icon('list', 17)}
@@ -360,7 +426,7 @@ export async function renderFiles(page: FilesPage) {
                   type="button"
                   data-view="grid"
                   class="icon-btn"
-                  aria-pressed="false"
+                  aria-pressed={page.view === 'grid'}
                   aria-label="Grid view"
                 >
                   {icon('grid', 16)}
@@ -380,7 +446,7 @@ export async function renderFiles(page: FilesPage) {
               Clear
             </button>
           </div>
-          <div class="file-table" data-list>
+          <div class="file-table" data-list data-display={page.view}>
             {page.entries.length ? (
               <div class="file-head">
                 <label>
@@ -390,15 +456,34 @@ export async function renderFiles(page: FilesPage) {
                     id="select-all"
                   />
                 </label>
-                <button type="button" data-sort="name">
-                  Name {icon('down', 12)}
-                </button>
-                <button type="button" data-sort="size">
-                  Size
-                </button>
-                <button type="button" data-sort="date">
-                  Modified
-                </button>
+                {(
+                  [
+                    ['name', 'Name'],
+                    ['size', 'Size'],
+                    ['mtime', 'Modified'],
+                  ] as const
+                ).map(([field, text]) => (
+                  <button
+                    type="button"
+                    data-sort={field}
+                    aria-pressed={sortField === field}
+                    aria-label={
+                      sortField === field
+                        ? text +
+                          (descending
+                            ? ', sorted descending'
+                            : ', sorted ascending')
+                        : text
+                    }
+                  >
+                    {text}
+                    {sortField === field ? (
+                      <span class={descending ? 'sort-desc' : 'sort-asc'}>
+                        {icon('down', 12)}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
                 <span></span>
               </div>
             ) : null}
@@ -587,7 +672,7 @@ export async function renderFiles(page: FilesPage) {
         </form>,
       )}
       {operationsDialog()}
-      {shareEditor(page.csrf)}
+      {shareEditor(page.csrf, page.mounts)}
       {shareResult()}
     </section>
   )
@@ -604,6 +689,7 @@ export async function renderFiles(page: FilesPage) {
     page.csrf,
     200,
     page.brand,
+    page.theme,
   )
 }
 export async function renderShares(page: Shell & { shares: ShareView[] }) {
@@ -632,6 +718,8 @@ export async function renderShares(page: Shell & { shares: ShareView[] }) {
                 expiresAt: s.expiresAt,
                 maxBytes: s.maxBytes,
                 maxDownloads: s.maxDownloads,
+                bytesPerSecond: s.bytesPerSecond,
+                latestAtPath: s.latestAtPath,
               })}
             >
               <input
@@ -686,7 +774,7 @@ export async function renderShares(page: Shell & { shares: ShareView[] }) {
           'share',
         )
       )}
-      {shareEditor(page.csrf)}
+      {shareEditor(page.csrf, page.mounts)}
       {shareResult()}
       {dialog('share-history', 'Link history', <div data-history-list></div>)}
       {confirmDialog()}
@@ -698,6 +786,7 @@ export async function renderShares(page: Shell & { shares: ShareView[] }) {
     page.csrf,
     200,
     page.brand,
+    page.theme,
   )
 }
 export function confirmDialog() {
@@ -774,5 +863,6 @@ export async function renderTrash(page: Shell & { items: TrashView[] }) {
     page.csrf,
     200,
     page.brand,
+    page.theme,
   )
 }

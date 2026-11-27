@@ -383,6 +383,8 @@ export class ShareStore {
         !old ||
         suppliedTargets !== undefined ||
         kind !== old.kind ||
+        (input.latestAtPath !== undefined &&
+          input.latestAtPath !== old.latestAtPath) ||
         ownerId !== old.ownerId ||
         input.enabled === true
       const targets = needTargetCheck

@@ -13,6 +13,7 @@ import {
   notice,
   onWorkspaceReady,
   refKey,
+  refUrl,
   refresh,
   rowEntry,
   select,
@@ -36,6 +37,7 @@ import {
 import { initUploads } from './uploads.js'
 
 let anchorIndex = -1
+let anchorSelection = new Set()
 let prefOwner = ''
 let stream
 let activeTypeTimer
@@ -47,6 +49,7 @@ function guard(work) {
 }
 function init() {
   anchorIndex = -1
+  anchorSelection.clear()
   initSelection()
   guard(initUploads(notice))
   const owner = $('[data-account]')?.dataset.account || ''
@@ -63,6 +66,8 @@ function init() {
       if (!list) return
       try {
         const rows = JSON.parse(e.data)
+        $('[data-transfer-rate]', list).textContent =
+          size(rows.reduce((total, t) => total + t.bytesPerSecond, 0)) + '/s'
         const body = $('tbody', list)
         const existing = new Map(
           [...body.rows].map((row) => [row.dataset.transferId, row]),
@@ -94,17 +99,25 @@ function init() {
     })
   }
 }
+function setSelectionAnchor(index) {
+  anchorIndex = index
+  anchorSelection = new Set(selection().map((entry) => refKey(entry.ref)))
+}
 function rangeCheck(row, checked, shift) {
-  const rows = all('.file-row'),
-    end = rows.indexOf(row)
-  if (shift && anchorIndex >= 0)
-    for (const el of rows.slice(
-      Math.min(end, anchorIndex),
-      Math.max(end, anchorIndex) + 1,
-    ))
-      select(rowEntry(el), checked)
-  else select(rowEntry(row), checked)
-  anchorIndex = end
+  const rows = all('.file-row')
+  const end = rows.indexOf(row)
+  if (shift && anchorIndex >= 0) {
+    const first = Math.min(anchorIndex, end)
+    const last = Math.max(anchorIndex, end)
+    rows.forEach((element, index) => {
+      const entry = rowEntry(element)
+      const inRange = first <= index && index <= last
+      select(entry, inRange ? checked : anchorSelection.has(refKey(entry.ref)))
+    })
+  } else {
+    select(rowEntry(row), checked)
+    setSelectionAnchor(end)
+  }
   syncSelection()
 }
 function internal(a) {
@@ -121,6 +134,80 @@ function internal(a) {
     /^\/_\/(files|shares|trash|admin|account)\/?$/.test(a.pathname) && !a.hash
   )
 }
+// Only expanded directories request an authorized listing. Add at most one
+// page of buttons at a time, even if the host folder contains thousands.
+async function toggleFolders(button) {
+  const list = button.parentElement.nextElementSibling
+  const expanded = button.getAttribute('aria-expanded') !== 'true'
+  button.setAttribute('aria-expanded', String(expanded))
+  list.hidden = !expanded
+  if (!expanded || list.dataset.loaded) return
+  list.dataset.loaded = 'loading'
+  list.setAttribute('aria-busy', 'true')
+  try {
+    const ref = JSON.parse(button.dataset.folders)
+    const entries = (await json(refUrl('/_/api/v1/entries', ref)))
+      .filter((entry) => entry.kind === 'directory')
+      .sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true }),
+      )
+    if (!list.isConnected) return
+    const message = (text) => {
+      const li = document.createElement('li')
+      li.className = 'folder-note'
+      li.textContent = text
+      list.append(li)
+      return li
+    }
+    let offset = 0
+    function appendPage() {
+      for (const entry of entries.slice(offset, offset + 50)) {
+        const li = document.createElement('li')
+        const row = document.createElement('div')
+        row.className = 'folder-node'
+        const a = document.createElement('a')
+        a.href = refUrl('/_/files', entry.ref)
+        a.textContent = entry.name
+        a.title = entry.name
+        const more = button.cloneNode(true)
+        more.dataset.folders = JSON.stringify(entry.ref)
+        more.setAttribute('aria-label', 'Folders in ' + entry.name)
+        more.setAttribute('aria-expanded', 'false')
+        const children = document.createElement('ul')
+        children.className = 'folder-children'
+        children.hidden = true
+        children.id = 'folders-' + crypto.randomUUID()
+        more.setAttribute('aria-controls', children.id)
+        row.append(a, more)
+        li.append(row, children)
+        list.append(li)
+      }
+      offset += 50
+      if (offset < entries.length) {
+        const li = message('')
+        const more = document.createElement('button')
+        more.type = 'button'
+        more.textContent = 'More folders'
+        more.onclick = () => {
+          li.remove()
+          appendPage()
+        }
+        li.append(more)
+      }
+    }
+    if (entries.length) appendPage()
+    else message('No subfolders')
+    list.dataset.loaded = 'ready'
+  } catch (error) {
+    delete list.dataset.loaded
+    button.setAttribute('aria-expanded', 'false')
+    list.hidden = true
+    throw error
+  } finally {
+    list.removeAttribute('aria-busy')
+  }
+}
+
 onWorkspaceReady(init)
 initActions()
 init()
@@ -151,6 +238,10 @@ document.addEventListener('click', (e) => {
     toggleNavigation(false)
   }
   const b = target.closest('button')
+  if (b?.hasAttribute('data-folders')) {
+    guard(toggleFolders(b))
+    return
+  }
   if (b?.dataset.cancelTransfer) {
     guard(
       ask('Cancel this active transfer?').then(async (confirmed) => {
@@ -170,7 +261,7 @@ document.addEventListener('click', (e) => {
   }
   if (b?.dataset.open) {
     const name = b.dataset.open
-    if (['favorites', 'recent'].includes(name)) openSaved(name)
+    if (['favorites', 'recent'].includes(name)) guard(openSaved(name))
     else show(name)
     return
   }
@@ -179,8 +270,7 @@ document.addEventListener('click', (e) => {
     return
   }
   if (b?.dataset.sort) {
-    let key = b.dataset.sort
-    if (key === 'date') key = 'mtime'
+    const key = b.dataset.sort
     guard(
       changePrefs({ sort: prefs().sort === key ? key + '-desc' : key }).then(
         refresh,
@@ -194,6 +284,7 @@ document.addEventListener('click', (e) => {
   }
   if (b?.hasAttribute('data-clear-selection')) {
     clearChoice()
+    setSelectionAnchor(-1)
     return
   }
   const row = target.closest('.file-row')
@@ -203,6 +294,7 @@ document.addEventListener('click', (e) => {
   }
   if (target.id === 'select-all') {
     for (const el of all('.file-row')) select(rowEntry(el), target.checked)
+    setSelectionAnchor(-1)
     syncSelection()
     return
   }
@@ -294,6 +386,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault()
     if (key === 'a') {
       for (const row of all('.file-row')) select(rowEntry(row), true)
+      setSelectionAnchor(-1)
       syncSelection()
     } else clipboardAction({ c: 'copy', x: 'move', v: 'paste' }[key])
     return
@@ -310,9 +403,15 @@ document.addEventListener('keydown', (e) => {
       e.key === 'ArrowDown'
         ? row.nextElementSibling
         : row.previousElementSibling
-    if (next) {
+    if (next?.matches('.file-row')) {
+      const rows = all('.file-row')
+      if (e.shiftKey) {
+        if (anchorIndex < 0) setSelectionAnchor(rows.indexOf(row))
+        rangeCheck(next, true, true)
+      } else {
+        setSelectionAnchor(rows.indexOf(next))
+      }
       $('.entry-name', next).focus()
-      if (e.shiftKey) rangeCheck(next, true, true)
     }
     return
   }
@@ -370,16 +469,27 @@ document.addEventListener('drop', (e) => {
     }
   }
 })
-window.addEventListener('transfer-complete', (e) => {
-  const ref = currentRef(),
-    job = e.detail
+let changedFolder
+function refreshUploadedFolder() {
+  if (!changedFolder || document.querySelector('dialog[open]')) return
+  const ref = currentRef()
+  const folder = changedFolder
+  changedFolder = undefined
   if (
-    ref &&
-    !document.querySelector('dialog[open]') &&
-    ref.mountId === job.mount &&
-    JSON.stringify(ref.segments) === JSON.stringify(job.parent)
+    ref?.mountId === folder.mount &&
+    JSON.stringify(ref.segments) === JSON.stringify(folder.parent)
   )
     guard(refresh())
-  else if (ref)
-    notice('Upload complete. Refresh the folder to see the new file.')
+}
+document.addEventListener('close', refreshUploadedFolder, true)
+window.addEventListener('transfer-complete', (event) => {
+  const folder = event.detail
+  const ref = currentRef()
+  if (
+    ref?.mountId === folder.mount &&
+    JSON.stringify(ref.segments) === JSON.stringify(folder.parent)
+  ) {
+    changedFolder = folder
+    refreshUploadedFolder()
+  }
 })

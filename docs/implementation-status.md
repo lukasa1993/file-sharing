@@ -12,7 +12,8 @@ Time-sensitive tests use Effect's `TestClock` under Bun's native runner. Session
 
 ## Coverage tooling
 
-The pinned Bun release records lines and functions. Its LCOV generator explicitly omits branch counters. Effect's maintainers publish `@effect/vitest` as a Vitest integration. It does not supply a branch profiler for JavaScriptCore or run the Bun-specific SQLite and HTTP paths under V8. This project uses the Effect maintainers' testing APIs from the existing `effect` package. The branch gate returns a failure when measurements are unavailable. [Bun LCOV source](https://github.com/oven-sh/bun/blob/bun-v1.4.5/src/sourcemap_jsc/CodeCoverage.rs#L519-L522) · [Effect testing integration](https://www.npmjs.com/package/@effect/vitest)
+The development coverage command uses the upstream IstanbulJS instrumenter with the TypeScript and JSX parsers. It seeds every production module before running the Bun suite and Chromium journeys in an isolated copy. The report merges source-level counters across test workers, server processes and browser navigations. Missing executable modules, missing browser evidence, failed suites, or results below 90% lines or 85% branch outcomes fail the command. The HTML, LCOV, JSON and run evidence are under `.quality/coverage/`. The normal production bundle contains no coverage instrumentation. [IstanbulJS](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-lib-instrument)
+
 
 ## Local verification
 
@@ -20,18 +21,29 @@ These measurements come from the Codex Cloud Linux amd64 runner. The fixtures us
 
 | Check | Observed result |
 | --- | --- |
-| Native suite | All 174 Bun tests passed across 18 files, with 1,475 assertions. This includes four forced process exits at different upload write and publication boundaries. |
-| Browser handoff | Both Chromium e2e tests passed with action replay disabled and the ChatGPT subscription model. The handoff checked the copied link, signed-out access, filename, and downloaded bytes. |
+| Native suite | All 218 Bun tests passed across 25 files, with 1,777 assertions under original-source instrumentation. This includes four forced process exits at different upload write and publication boundaries. |
+| Browser workflows | All 66 Chromium checks across 12 files passed with zero skips or flaky results. The ChatGPT handoff made nine live model calls and verified the copied link, signed-out access, filename and downloaded bytes. All 65 deterministic checks also passed together in Firefox 159 against a fresh disposable instance, with zero retries. |
+| Visual checks | Twenty-five Chromium captures covered 320, 390, 768, and 1,440 pixel widths, including dark mode, dialogs, public handoffs, and mobile administration. The audit found no horizontal page overflow or captured browser errors. The lshare primary button measured 5.98:1 text contrast in light mode and 9.48:1 in dark mode. |
 | Upload restart | After a forced process exit, the replacement process accepted the saved session, reported offset 7,129, rejected a stale offset, and returned all 16,387 original bytes after completion. Chromium also resumed a transfer after the server reduced its maximum chunk size. |
 | Database contention | A separate SQLite connection held a write transaction through server startup. After it committed, the service retained the write and created one administrator and one bootstrap audit entry. |
 | Native streaming | Three simultaneous clients received matching hashes for 32 MiB each. The production HTTP adapter supplied the declared response length. The isolated run took 486 ms with sampled process RSS growth of 39,424,000 bytes. |
 | Large-file range | A real HTTP range at byte offset 108,447,924,224 in a sparse file returned HTTP 206, the correct 21 bytes and a content length of 21. A subsequent HEAD returned the original size and the same strong ETag. The cold SHA-256 pass and both requests took 272.4 seconds on the four-CPU cloud runner with 10.1 MiB sampled RSS growth. |
-| Coverage | Native LCOV recorded 8,443 of 9,079 lines in the production modules it loaded (93.0%). It omitted the server entry point and five browser modules, and contained no branch counters. The coverage command returned failure as configured. Some critical lines remain uncovered. |
+| Coverage | IstanbulJS measured 4,629 of 4,982 production lines (92.91%) and 3,508 of 4,070 branch outcomes (86.19%). All 43 production modules were accounted for, including all six browser modules. The report combines 126 Chromium document snapshots, nine server processes, and five other Bun processes. Source, test input and asset digests matched the final checkout. |
 | Mutation testing | All 157 session-storage mutants and all 85 proxy-trust mutants were killed, with all default mutation operators enabled. A broader development snapshot generated 11,907 mutants. That run stopped after subsequent code changes invalidated the snapshot. A complete score for the integrated project remains outstanding. CI is configured to combine twelve disjoint groups and reject stale or missing reports. |
 | Static and dependency checks | The production build, strict TypeScript, formatting, lint and official Effect CLI and editor checks passed. Bun reported zero high or critical package advisories. Its all-severity audit listed five moderate development findings and one low transitive production finding in esbuild's Windows development server. |
 | Container | The Linux amd64 image served HTTP with a read-only root and a non-root user and restarted against existing state after removal of the bootstrap file. Native arm64 is configured in CI and awaits execution. |
 
-The coverage and full-project mutation requirements remain open. The deployment-specific acceptance checks also require the intended reverse proxy, mount types, browsers and fully allocated large files. The local volume has 63 GiB capacity. Sparse offsets and separate concurrent transfers cover different cases from a complete 100 GiB upload or download.
+The aggregate line and branch gates passed. Twenty-five critical modules still fall below their 100% target. The full-project mutation score remains unverified. The deployment-specific acceptance checks also require the intended reverse proxy, mount types, browsers and fully allocated large files. The local volume has 63 GiB capacity. Sparse offsets and separate concurrent transfers cover different cases from a complete 100 GiB upload or download.
+
+## Verified user journeys
+
+| Area | What the tests exercise |
+| --- | --- |
+| File management | Expand the storage tree, create a folder, upload and edit a document, rename individually and in bulk, copy and move, use keyboard cut/paste, find entries across folders, favorite them, and restore into an occupied directory. [File management](../tests/files-management.e2e.ts) |
+| Send and request files | Copy a public link and download its exact bytes as a guest. Browse a shared selection, unlock a protected subfolder, sign in as an invited member, deliver to an upload-only folder, rename or revoke an alias, and replace its target. Random direct links, expiry, aggregate upload caps, concurrent bandwidth, transfer leases and file-version behavior have recipient and HTTP checks. [Public handoff](../tests/share-download.e2e.ts) · [Recipients](../tests/sharing-recipients.e2e.ts) · [Sharing options](../tests/sharing-options.e2e.ts) |
+| Transfers and previews | Use file and folder pickers, drop files, handle collisions, pause, retry, resume after a reload, and cancel. Check the downloaded bytes, raster decoding, playable audio, editable text, ordinary downloads for unsupported files, and original paths and bytes in a TAR. [Uploads](../tests/transfer-upload.e2e.ts) · [Previews and archives](../tests/transfer-preview.e2e.ts) |
+| Accounts and administration | Configure a user, group and folder grant, provision a private home, enforce its quota, change a password, identify and revoke a device session, issue and revoke a scoped API token, change retention and branding, and download diagnostics. Account and admin form submissions also work with browser scripts disabled. [Account workflows](../tests/account-workflows.e2e.ts) |
+| Appearance and interaction | Load the workspace mark and favicon, persist appearance, use phone navigation, restore keyboard focus, select across paginated listings, cancel a clipboard operation, inspect details, recover from navigation errors, and keep a transfer active through back/forward navigation. [Appearance](../tests/display.e2e.ts) · [Interface](../tests/interface.e2e.ts) · [Workspace interactions](../tests/interface-workspace.e2e.ts) |
 
 ## Supported behavior and boundaries
 

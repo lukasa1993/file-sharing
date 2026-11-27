@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ResourceRef } from '../../app/contracts.ts'
 import { fixture, type Fixture } from '../fixture.ts'
@@ -292,6 +292,32 @@ describe('file operations and preferences over HTTP', () => {
     })
     expect(purged.results[1]).toMatchObject({ id: purge, ok: true })
     expect(await trashIds()).toEqual([])
+  })
+
+  test('sorts by type, size and modification time while keeping folders first', async () => {
+    const dir = join(f.storage, 'sort-options')
+    await mkdir(join(dir, 'Folder'), { recursive: true })
+    for (const [name, contents, day] of [
+      ['alpha.txt', 'abc', 3],
+      ['bravo.md', 'a', 2],
+      ['charlie.md', 'ab', 1],
+    ] as const) {
+      const file = join(dir, name)
+      await writeFile(file, contents)
+      await utimes(file, day * 86400, day * 86400)
+    }
+    const order = {
+      size: ['bravo.md', 'charlie.md', 'alpha.txt'],
+      'size-desc': ['alpha.txt', 'charlie.md', 'bravo.md'],
+      type: ['bravo.md', 'charlie.md', 'alpha.txt'],
+      'type-desc': ['alpha.txt', 'bravo.md', 'charlie.md'],
+      mtime: ['charlie.md', 'bravo.md', 'alpha.txt'],
+      'mtime-desc': ['alpha.txt', 'bravo.md', 'charlie.md'],
+    }
+    for (const [sort, names] of Object.entries(order)) {
+      expect((await post(preferences, { sort })).status).toBe(200)
+      expect(await pageEntries('sort-options')).toEqual(['Folder', ...names])
+    }
   })
 
   test('applies folder and recursive search, sorted pagination, favorites and recent folders', async () => {

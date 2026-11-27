@@ -53,36 +53,6 @@ export function applyPrefs() {
   all('[data-view]').forEach((b) =>
     b.setAttribute('aria-pressed', String(b.dataset.view === preferences.view)),
   )
-  const holder = $('[data-file-rows]')
-  if (!holder) return
-  const sort = preferences.sort || 'name',
-    descending = sort.endsWith('-desc'),
-    field = sort.replace('-desc', '')
-  const rows = all('.file-row', holder).map((row) => ({
-    row,
-    item: JSON.parse(row.dataset.entry),
-  }))
-  const strings = new Intl.Collator(undefined, {
-    numeric: true,
-    sensitivity: 'base',
-  })
-  rows.sort((a, b) => {
-    if (a.item.kind !== b.item.kind) return a.item.kind === 'directory' ? -1 : 1
-    const av = a.item,
-      bv = b.item
-    let result
-    if (field === 'size') result = av.size - bv.size
-    else if (field === 'mtime' || field === 'modifiedAt')
-      result = String(av.modifiedAt).localeCompare(String(bv.modifiedAt))
-    else if (field === 'type')
-      result = strings.compare(
-        av.name.split('.').pop(),
-        bv.name.split('.').pop(),
-      )
-    else result = strings.compare(av.name, bv.name)
-    return (descending ? -1 : 1) * result || strings.compare(av.name, bv.name)
-  })
-  holder.append(...rows.map((x) => x.row))
 }
 export async function loadPrefs() {
   if (!$('.app')) return
@@ -93,10 +63,19 @@ export async function loadPrefs() {
     notice(e.message, true)
   }
 }
-export function openSaved(kind) {
-  const list =
-    kind === 'favorites' ? preferences.favorites : preferences.recents
+export async function openSaved(kind) {
   const panel = $('[data-saved-list="' + kind + '"]')
+  show(kind)
+  let list = preferences.favorites
+  if (kind === 'recent') {
+    panel.textContent = 'Loading recently opened folders…'
+    try {
+      list = (await json('/_/api/v1/preferences')).recents
+    } catch (e) {
+      panel.textContent = e.message + ' Close and reopen Recent to try again.'
+      return
+    }
+  }
   panel.replaceChildren()
   if (!list?.length) {
     const p = document.createElement('p')
@@ -118,7 +97,6 @@ export function openSaved(kind) {
     a.title = kind === 'recent' ? 'Open folder' : 'Open containing folder'
     panel.append(a)
   }
-  show(kind)
 }
 export function menu(entry) {
   targetRows = [entry]
@@ -197,6 +175,44 @@ function opDialog(name, rows, destination) {
     f.elements.name.select()
   }
 }
+function addShareTarget(form, ref) {
+  const row = $(
+    '[data-target-template]',
+    form,
+  ).content.firstElementChild.cloneNode(true)
+  const mount = $('[data-target-mount]', row)
+  if (ref) {
+    if (![...mount.options].some((option) => option.value === ref.mountId))
+      mount.add(new Option(ref.mountId, ref.mountId))
+    mount.value = ref.mountId
+    const input = $('[data-target-path]', row)
+    input.value = '/' + ref.segments.join('/')
+    // Preserve existing names containing newlines until their actual input is edited.
+    input.dataset.original = JSON.stringify(ref.segments)
+    input.defaultValue = input.value
+  }
+  $('[data-target-remove]', row).hidden = shareKind === 'upload'
+  $('[data-target-list]', form).append(row)
+  return row
+}
+function changedTargets(form) {
+  const rows = all('[data-target-row]', form)
+  if (!rows.length) throw new Error('Choose at least one shared item.')
+  return rows.map((row) => {
+    const path = $('[data-target-path]', row)
+    const relative = path.value.replace(/^\//, '')
+    const original = path.dataset.original
+    return {
+      mountId: $('[data-target-mount]', row).value,
+      segments:
+        original && path.value === path.defaultValue
+          ? JSON.parse(original)
+          : relative
+            ? relative.split('/')
+            : [],
+    }
+  })
+}
 function syncShareFields() {
   const f = $('#share-form')
   if (!f) return
@@ -207,8 +223,15 @@ function syncShareFields() {
   f.elements.password.required = password && !editId
   $('[data-public-warning]', f).hidden = !pub
   f.elements.confirmPublic.required = pub
+  const targetFields = $('[data-target-fields]', f)
+  targetFields.hidden = targetFields.disabled =
+    !editId || !f.elements.retarget.checked
   $('[data-mode-field]', f).hidden = upload
-  $('[data-limit-field]', f).hidden = upload
+  for (const node of all(
+    '[data-limit-field], [data-rate-field], [data-lease-help], [data-latest-field]',
+    f,
+  ))
+    node.hidden = upload
   $('[data-cap-field]', f).hidden = !upload
 }
 function shareDialog(rows, kind, existing) {
@@ -219,6 +242,13 @@ function shareDialog(rows, kind, existing) {
   shareKind = kind
   editId = existing?.id || ''
   shareTargets = existing?.targets || rows.map((r) => r.ref)
+  $('[data-target-editor]', f).hidden = !existing
+  $('[data-target-list]', f).replaceChildren()
+  $('[data-target-add]', f).hidden = kind === 'upload'
+  if (existing) {
+    for (const target of shareTargets) addShareTarget(f, target)
+    if (!shareTargets.length) addShareTarget(f)
+  }
   setLabel(
     d,
     'h2',
@@ -243,6 +273,9 @@ function shareDialog(rows, kind, existing) {
     shareTargets.map((ref) => ref.segments.at(-1) || ref.mountId).join(', '),
   )
   if (existing) {
+    f.elements.latestAtPath.checked = !!existing.latestAtPath
+    if (existing.bytesPerSecond)
+      f.elements.bandwidthKiB.value = existing.bytesPerSecond / 1024
     f.elements.alias.value = existing.alias
     f.elements.access.value = existing.access
     f.elements.mode.value = existing.mode
@@ -259,6 +292,7 @@ function shareDialog(rows, kind, existing) {
     if (existing.maxDownloads)
       f.elements.maxDownloads.value = existing.maxDownloads
   }
+  f.elements.expiresAt.dataset.original = f.elements.expiresAt.value
   syncShareFields()
   show('share-editor')
 }
@@ -266,13 +300,19 @@ async function submitShare(f) {
   const value = f.elements
   const body = {
     kind: shareKind,
-    targets: shareTargets,
+    ...(!editId
+      ? { targets: shareTargets }
+      : value.retarget.checked
+        ? { targets: changedTargets(f) }
+        : {}),
     mode: shareKind === 'upload' ? 'landing' : value.mode.value,
     access: value.access.value,
     confirmPublic: value.confirmPublic.checked,
-    expiresAt: value.expiresAt.value
+  }
+  if (!editId || value.expiresAt.dataset.original !== value.expiresAt.value) {
+    body.expiresAt = value.expiresAt.value
       ? new Date(value.expiresAt.value).toISOString()
-      : null,
+      : null
   }
   const alias = value.alias.value.trim()
   if (alias) body.alias = alias
@@ -280,12 +320,17 @@ async function submitShare(f) {
     body.password = value.password.value
   if (shareKind === 'upload')
     body.maxBytes = value.maxMiB.value
-      ? Number(value.maxMiB.value) * 1048576
+      ? Math.round(Number(value.maxMiB.value) * 1048576)
       : null
-  else
+  else {
     body.maxDownloads = value.maxDownloads.value
       ? Number(value.maxDownloads.value)
       : null
+    body.bytesPerSecond = value.bandwidthKiB.value
+      ? Math.round(Number(value.bandwidthKiB.value) * 1024)
+      : null
+    body.latestAtPath = value.latestAtPath.checked
+  }
   const result = await json(
     editId ? shares + '/' + encodeURIComponent(editId) : shares,
     editId ? 'PATCH' : 'POST',
@@ -748,6 +793,12 @@ export function initActions() {
   document.addEventListener(
     'close',
     (e) => {
+      if (e.target.id === 'token-result') {
+        const field = $('[data-new-token]', e.target)
+        field.value = ''
+        field.type = 'password'
+        refresh().catch((err) => notice(err.message, true))
+      }
       if (e.target.id === 'preview') {
         previewTicket++
         $('[data-preview-body]', e.target)?.replaceChildren()
@@ -761,12 +812,35 @@ export function initActions() {
       $('.batch-share-tools').hidden = count === 0
       $('[data-share-total]').textContent = count + ' selected'
     }
-    if (e.target.matches('#share-form [name=access]')) syncShareFields()
+    if (
+      e.target.matches('#share-form [name=access], #share-form [name=retarget]')
+    )
+      syncShareFields()
   })
   document.addEventListener('click', (e) => {
     const b = e.target.closest('button')
     if (!b) return
     const work = async () => {
+      if (b.hasAttribute('data-show-token')) {
+        const field = $('[data-new-token]', b.closest('dialog'))
+        const visible = field.type === 'password'
+        field.type = visible ? 'text' : 'password'
+        b.textContent = visible ? 'Hide token' : 'Show token'
+        b.setAttribute('aria-pressed', String(visible))
+        return
+      }
+      if (b.hasAttribute('data-copy-token')) {
+        const field = $('[data-new-token]', b.closest('dialog'))
+        if (!navigator.clipboard?.writeText) {
+          field.type = 'text'
+          field.select()
+          notice('Press Ctrl+C or Command+C to copy the selected token.')
+          return
+        }
+        await navigator.clipboard.writeText(field.value)
+        notice('Token copied.')
+        return
+      }
       if (b.hasAttribute('data-adjacent')) {
         const gallery = all('.file-row')
           .map((row) => JSON.parse(row.dataset.entry))
@@ -776,6 +850,14 @@ export function initActions() {
         )
         const item = gallery[current + Number(b.dataset.adjacent)]
         if (item) await openPreview(item)
+        return
+      }
+      if (b.hasAttribute('data-target-add')) {
+        $('[data-target-path]', addShareTarget(b.form)).focus()
+        return
+      }
+      if (b.hasAttribute('data-target-remove')) {
+        b.closest('[data-target-row]').remove()
         return
       }
       if (b.dataset.shareBatch) {
@@ -822,10 +904,32 @@ export function initActions() {
           const info = await json(shares + '/' + row.id),
             list = $('[data-history-list]')
           list.replaceChildren()
-          const count = document.createElement('p')
-          count.textContent =
-            Number(info.usedTransfers || 0) + ' download leases used'
-          list.append(count)
+          if (info.kind === 'download') {
+            const usage = document.createElement('p')
+            usage.textContent =
+              Number(info.requests || 0) +
+              (info.requests === 1
+                ? ' transfer request · '
+                : ' transfer requests · ') +
+              size(info.bytesServed || 0) +
+              ' served'
+            list.append(usage)
+            if (info.maxDownloads !== null) {
+              const budget = document.createElement('p')
+              budget.textContent =
+                Number(info.usedTransfers || 0) +
+                ' of ' +
+                info.maxDownloads +
+                ' download leases used'
+              list.append(budget)
+            }
+            if (info.lastAccess) {
+              const last = document.createElement('p')
+              last.textContent =
+                'Last transfer ' + new Date(info.lastAccess).toLocaleString()
+              list.append(last)
+            }
+          }
           for (const change of info.history || []) {
             const p = document.createElement('p')
             p.textContent =

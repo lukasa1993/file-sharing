@@ -1,7 +1,7 @@
 /** @jsxImportSource remix/component */
 import type { RemixNode } from 'remix/component'
 import { renderToString } from 'remix/component/server'
-import type { ResourceRef, User } from '../contracts'
+import { defaultBrand, type ResourceRef, type User } from '../contracts'
 
 export type MountView = {
   id: string
@@ -15,6 +15,9 @@ export type Shell = {
   mounts: MountView[]
   home?: ResourceRef | null
   brand?: string
+  theme?: string
+  sort?: string
+  view?: string
 }
 export type Nav = 'files' | 'shares' | 'trash' | 'admin' | 'account'
 const paths = {
@@ -75,19 +78,13 @@ export function icon(name: Glyph, size = 18) {
 }
 export function brandmark() {
   return (
-    <svg
+    <img
       class="brandmark"
+      src="/assets/workspace-icon"
       width="31"
       height="31"
-      viewBox="0 0 32 32"
-      aria-hidden="true"
-    >
-      <rect width="32" height="32" rx="7" fill="currentColor" />
-      <path
-        d="M7 9h8l3 3h7v3H7zm0 8h18v3H7zm0 5h13v2H7z"
-        fill="var(--canvas)"
-      />
-    </svg>
+      alt=""
+    />
   )
 }
 export function sizeLabel(value?: number | null) {
@@ -154,17 +151,18 @@ export async function documentPage(
   body: RemixNode,
   csrf = '',
   status = 200,
-  brand = 'Fileserver',
+  brand = defaultBrand,
+  theme = 'system',
 ) {
   const html = await renderToString(
-    <html lang="en">
+    <html lang="en" data-theme={theme}>
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="color-scheme" content="light dark" />
         <meta name="csrf-token" content={csrf} />
         <title>{title + ' · ' + brand}</title>
-        <link rel="icon" href="/assets/mark.svg" type="image/svg+xml" />
+        <link rel="icon" href="/assets/workspace-icon" />
         <link rel="stylesheet" href="/assets/files.css" />
         <script type="module" src="/assets/files.js"></script>
       </head>
@@ -187,6 +185,40 @@ const sections = [
   ['shares', 'share', 'Shared links', '/_/shares'],
   ['trash', 'trash', 'Trash', '/_/trash'],
 ] as const
+function folderBranch(
+  ref: ResourceRef,
+  label: string,
+  glyph: 'storage' | 'lock',
+  id: string,
+  available = true,
+) {
+  return (
+    <div class="folder-branch">
+      <div class="folder-node">
+        <a href={refUrl('/_/files', ref)} class="nav-item">
+          {icon(glyph)}
+          <span>{label}</span>
+          {!available ? (
+            <span class="warning-dot" title="Unavailable"></span>
+          ) : null}
+        </a>
+        {available ? (
+          <button
+            type="button"
+            class="folder-toggle"
+            data-folders={JSON.stringify(ref)}
+            aria-label={'Folders in ' + label}
+            aria-expanded="false"
+            aria-controls={id}
+          >
+            <span aria-hidden="true">›</span>
+          </button>
+        ) : null}
+      </div>
+      <ul class="folder-children" id={id} hidden></ul>
+    </div>
+  )
+}
 export function appShell(
   shell: Shell,
   current: Nav,
@@ -195,7 +227,7 @@ export function appShell(
   tools?: RemixNode,
   crumb?: RemixNode,
 ) {
-  const root = shell.brand || 'Fileserver'
+  const root = shell.brand || defaultBrand
   return (
     <div class="app" data-account={shell.user.id}>
       <a class="skip" href="#workspace">
@@ -231,34 +263,34 @@ export function appShell(
         </nav>
         <nav aria-label="Storage">
           <span class="section-title">Storage</span>
-          {shell.home ? (
-            <a class="nav-item" href={refUrl('/_/files', shell.home)}>
-              {icon('lock')}Private home
-            </a>
-          ) : null}
-          {shell.mounts.map((m) => (
-            <a
-              href={refUrl('/_/files', { mountId: m.id, segments: [] })}
-              class="nav-item"
-            >
-              {icon('storage')}
-              <span>{m.label}</span>
-              {m.available === false ? (
-                <span class="warning-dot" title="Unavailable"></span>
-              ) : null}
-            </a>
-          ))}
+          {shell.home
+            ? folderBranch(shell.home, 'Private home', 'lock', 'home-folders')
+            : null}
+          {shell.mounts.map((m) =>
+            folderBranch(
+              { mountId: m.id, segments: [] },
+              m.label,
+              'storage',
+              'folders-' + m.id,
+              m.available !== false,
+            ),
+          )}
         </nav>
         <div class="rail-foot">
           {shell.user.admin ? (
             <a
               class={'nav-item' + (current === 'admin' ? ' current' : '')}
+              aria-current={current === 'admin' ? 'page' : undefined}
               href="/_/admin"
             >
               {icon('settings')}Administration
             </a>
           ) : null}
-          <a href="/_/account" class="account">
+          <a
+            href="/_/account"
+            class="account"
+            aria-current={current === 'account' ? 'page' : undefined}
+          >
             <span class="avatar">
               {shell.user.username.slice(0, 2).toUpperCase()}
             </span>
@@ -283,7 +315,10 @@ export function appShell(
           >
             {icon('menu')}
           </button>
-          <div class="breadcrumbs">{crumb || <span>{heading}</span>}</div>
+          <div class="breadcrumbs">
+            <span class="compact-mark">{brandmark()}</span>
+            {crumb || <span>{heading}</span>}
+          </div>
           <div class="bar-end">
             <button
               class="icon-btn"

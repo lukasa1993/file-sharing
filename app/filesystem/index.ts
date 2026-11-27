@@ -1223,6 +1223,17 @@ export class Filesystem {
       true,
     )
   }
+  trashRetention(mountId: string): number | null {
+    if (!this.mounts.some((m) => m.id === mountId))
+      fault(404, 'Unknown storage')
+    return (
+      this.db
+        .query<{ duration: number }, [string]>(
+          'SELECT duration FROM fs_retention WHERE mount=?',
+        )
+        .get(mountId)?.duration ?? null
+    )
+  }
   setTrashRetention(mountId: string, durationMs: number | null) {
     if (!this.mounts.some((m) => m.id === mountId))
       fault(404, 'Unknown storage')

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, test } from '@e2e-dev/web'
 import { credentials, expect } from 'e2e'
 
-describe('file sharing', () => {
+describe('file sharing', { tags: ['agent'] }, () => {
   test('a signed-out friend downloads the original file from the link an owner copied', async ({
     agent,
     app,

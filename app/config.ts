@@ -70,7 +70,7 @@ function readSmallFile(path: string, max: number, secret = false) {
     }
     if (used !== st.size || used > max)
       throw new Error('Configuration file changed while reading')
-    return bytes.toString('utf8', 0, used)
+    return bytes.subarray(0, used)
   } finally {
     closeSync(fd)
   }
@@ -127,7 +127,7 @@ export function loadConfig(
   const settingsFile = resolve(required(env, 'CONFIG_FILE'))
   const parsed = parseSafe(
     settings,
-    JSON.parse(readSmallFile(settingsFile, 65536)),
+    JSON.parse(readSmallFile(settingsFile, 65536).toString('utf8')),
   )
   if (
     !parsed.success ||
@@ -145,13 +145,19 @@ export function loadConfig(
   const bootstrapFile = env.BOOTSTRAP_FILE
     ? resolve(env.BOOTSTRAP_FILE)
     : undefined
-  const sessionSecret = readSmallFile(secretPath, 4096, true).trim()
+  const sessionSecret = readSmallFile(secretPath, 4096, true)
+    .toString('utf8')
+    .trim()
   if (Buffer.byteLength(sessionSecret) < 32)
     throw new Error('Session signing secret must have at least 32 bytes')
+  const iconPath = env.BRAND_ICON_FILE
+  if (iconPath && !isAbsolute(iconPath))
+    throw new Error('BRAND_ICON_FILE must be an absolute path')
   const reserved = [
     data,
     locate(secretPath, topology),
     locate(settingsFile, topology),
+    ...(iconPath ? [locate(iconPath, topology)] : []),
     ...(bootstrapFile ? [locate(bootstrapFile, topology)] : []),
   ]
   for (const name of [
@@ -235,5 +241,6 @@ export function loadConfig(
       directory: location === data,
     })),
     ...(bootstrapFile ? { bootstrapFile } : {}),
+    ...(iconPath ? { brandIcon: readSmallFile(iconPath, 256 * 1024) } : {}),
   }
 }

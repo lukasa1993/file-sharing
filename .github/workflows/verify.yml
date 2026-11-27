@@ -135,12 +135,21 @@ jobs:
         with:
           pattern: mutation-*
           path: .quality/shards
+      - name: Install Chromium for browser coverage
+        run: bun run e2e-web install chromium --with-deps
       - name: Verify development gates and combined mutation score
         if: needs.mutation-plan.outputs.scope == 'changed'
+        env:
+          FILESERVER_COVERAGE_DETERMINISTIC: '1'
         run: bun run quality
-      - name: Install browser for release certification
-        if: needs.mutation-plan.outputs.scope == 'all'
-        run: bun run e2e-web install chromium --with-deps
       - name: Verify release gates and combined mutation score
         if: needs.mutation-plan.outputs.scope == 'all'
         run: bun run release:check
+      - name: Preserve original-source coverage and measurement evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: istanbul-coverage
+          path: .quality/coverage/
+          include-hidden-files: true
+          if-no-files-found: warn

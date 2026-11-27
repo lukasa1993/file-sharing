@@ -5,6 +5,10 @@ import { chatgpt } from 'e2e/oauth/chatgpt'
 const localOrigin = 'http://127.0.0.1:8080'
 const appUrl = process.env.APP_URL || localOrigin
 
+const browser = process.env.E2E_BROWSER ?? 'chromium'
+if (browser !== 'chromium' && browser !== 'firefox')
+  throw new Error('E2E_BROWSER must be chromium or firefox')
+
 export default {
   agents: {
     default: {
@@ -17,13 +21,23 @@ export default {
       password: () => process.env.E2E_USER_OWNER_PASSWORD ?? '',
     },
   },
+  secrets: {
+    sharePassword: () => process.env.E2E_SECRET_SHARE_PASSWORD ?? '',
+    memberPassword: () => process.env.E2E_MEMBER_PASSWORD ?? '',
+    replacementPassword: () => process.env.E2E_REPLACEMENT_PASSWORD ?? '',
+  },
   targets: [
     {
-      engine: web(),
+      engine: web({ browser }),
       app: {
         url: appUrl,
         readyUrl: new URL('/readyz', appUrl).href,
-        permissions: { 'clipboard-read': 'grant', 'clipboard-write': 'grant' },
+        ...(browser === 'chromium' && {
+          permissions: {
+            'clipboard-read': 'grant',
+            'clipboard-write': 'grant',
+          },
+        }),
         command: process.env.APP_URL
           ? undefined
           : {

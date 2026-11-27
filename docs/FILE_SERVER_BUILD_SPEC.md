@@ -3,7 +3,7 @@
 **Status:** implementation brief, architecture locked; production release subject to the gates below.  
 **Documentation review:** 2026-11-27.  
 **Example public origin:** `https://dl.lnh.ge`.  
-**Working name:** `fileserver` (branding configurable; no product name selected).
+**Product name:** lshare. Hosts can configure their workspace name and icon.
 
 The [Effect architecture addendum](EFFECT_SPEC.md) governs server-side composition, exceptions to the dependency policy, testing, and quality gates wherever it supersedes this document.
 
@@ -499,7 +499,7 @@ G0–G4 and the mandatory parts of G5 pass. The direct dependency allowlist pass
 
 ## 16. Capability checks and open owner decisions
 
-- Project name, visual identity, exact admin default limits and retention. Initial priorities and route namespace can be changed at G0 before freeze.
+- Exact admin default limits and retention. Initial priorities and route namespace can be changed at G0 before freeze.
 - Whether to support hostile external writers beyond the trusted-host/SMB/NFS contract. If yes, a stronger OS confinement design or native helper may be necessary; never weaken security to maintain zero dependencies.
 - Exact stable-file/resume policy for externally in-place modified files (trusted publish-by-rename is recommended). Snapshot mode optional and off by default.
 - ZIP/ZIP64 export, advanced PDF/Markdown safety, video thumbnails/transcoding, unsupported Linux image codecs, OIDC, WebDAV, quotas for external writers, optional search index. Keep these scoped until native APIs and security are verified; no hidden dependency additions. No passkeys/TOTP by explicit owner decision.

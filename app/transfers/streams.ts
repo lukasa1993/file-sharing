@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
-import { Effect, Semaphore } from 'effect'
-import { setTimeout as delay } from 'node:timers/promises'
+import { Clock, Duration, Effect, Semaphore } from 'effect'
 import { AppError } from '../contracts.ts'
 
 export type TransferOptions = {
@@ -11,6 +10,15 @@ export type TransferOptions = {
   bytesPerSecond?: number
   uploadTtlMs?: number
 }
+
+export const defaultTransferLimits: Readonly<Required<TransferOptions>> =
+  Object.freeze({
+    maxChunkBytes: 16 * 1024 * 1024,
+    maxConcurrent: 32,
+    perActorConcurrent: 8,
+    bytesPerSecond: 0,
+    uploadTtlMs: 24 * 60 * 60 * 1000,
+  })
 
 export type ActiveTransfer = {
   id: string
@@ -22,6 +30,38 @@ export type ActiveTransfer = {
   bytesPerSecond: number
 }
 
+// A single leading 125ms quantum keeps the first byte responsive. An
+// interrupted waiter releases the turn before its unused allowance is charged.
+class BandwidthSchedule {
+  private nextPermitAt = 0
+  private readonly turn = Semaphore.makeUnsafe(1)
+  constructor(private readonly clock: Clock.Clock) {}
+  get idle() {
+    return (
+      this.nextPermitAt <= Number(this.clock.monotonicTimeNanosUnsafe()) / 1e6
+    )
+  }
+  take(bytes: number, rate: number) {
+    return this.turn.withPermit(
+      Effect.suspend(() => {
+        const now = Number(this.clock.monotonicTimeNanosUnsafe()) / 1e6
+        const end = Math.max(now, this.nextPermitAt) + (bytes * 1000) / rate
+        const wait = end - now - 125
+        const ready =
+          wait > 0
+            ? this.clock.sleep(Duration.millis(Math.ceil(wait)))
+            : Effect.void
+        return Effect.andThen(ready, () =>
+          Effect.sync(() => {
+            this.nextPermitAt = end
+          }),
+        )
+      }),
+    )
+  }
+}
+type RateLimit = { rate: number; schedule: BandwidthSchedule }
+
 export class Activity {
   readonly id = randomUUID()
   readonly startedAt = Date.now()
@@ -29,7 +69,7 @@ export class Activity {
   readonly signal: AbortSignal
   bytes = 0
   initialBytes = 0
-  private nextPermitAt = 0
+  readonly bandwidth: number
   readonly finished = Promise.withResolvers<void>()
 
   constructor(
@@ -37,22 +77,21 @@ export class Activity {
     readonly actor: string,
     readonly total: number | null,
     signal: AbortSignal,
-    readonly bandwidth: number,
+    private limits: readonly RateLimit[],
     readonly remove: () => void,
   ) {
+    this.bandwidth = limits.length
+      ? Math.min(...limits.map((limit) => limit.rate))
+      : 0
     this.signal = AbortSignal.any([signal, this.aborter.signal])
   }
 
   async meter(bytes: number) {
     this.signal.throwIfAborted()
-    if (this.bandwidth > 0) {
-      const now = performance.now()
-      this.nextPermitAt =
-        Math.max(now, this.nextPermitAt) + (1000 * bytes) / this.bandwidth
-      // Allow one small leading quantum. Idle hashing, previews, or backpressure
-      // must not accumulate bandwidth credit for a subsequent large burst.
-      const wait = this.nextPermitAt - now - 125
-      if (wait > 0) await delay(wait, undefined, { signal: this.signal })
+    for (const limit of this.limits) {
+      await Effect.runPromise(limit.schedule.take(bytes, limit.rate), {
+        signal: this.signal,
+      })
     }
     this.signal.throwIfAborted()
     this.bytes += bytes
@@ -75,10 +114,19 @@ export class Activity {
 
 export class ActivityRegistry {
   private jobs = new Map<string, Activity>()
+  private readonly actorBandwidth = new Map<
+    string,
+    { schedule: BandwidthSchedule; active: number }
+  >()
   private permits: Semaphore.Semaphore
   private stopping = false
-  constructor(readonly options: TransferOptions) {
-    this.permits = Semaphore.makeUnsafe(options.maxConcurrent ?? 32)
+  constructor(
+    readonly options: Readonly<
+      Required<TransferOptions>
+    > = defaultTransferLimits,
+    private readonly clock: Clock.Clock = Clock.Clock.defaultValue(),
+  ) {
+    this.permits = Semaphore.makeUnsafe(options.maxConcurrent)
   }
 
   start(
@@ -94,22 +142,39 @@ export class ActivityRegistry {
       (job) => job.actor === actor,
     ).length
     if (
-      actorJobs >= (this.options.perActorConcurrent ?? 8) ||
+      actorJobs >= this.options.perActorConcurrent ||
       !Effect.runSync(this.permits.takeIfAvailable(1))
     ) {
       throw new AppError(429, 'Too many active transfers. Try again shortly.')
     }
-    const rates = [this.options.bytesPerSecond ?? 0, bandwidth ?? 0].filter(
-      (rate) => rate > 0,
-    )
+    for (const [key, budget] of this.actorBandwidth) {
+      if (!budget.active && budget.schedule.idle)
+        this.actorBandwidth.delete(key)
+    }
+    const limits: RateLimit[] = []
+    if (this.options.bytesPerSecond > 0)
+      limits.push({
+        rate: this.options.bytesPerSecond,
+        schedule: new BandwidthSchedule(this.clock),
+      })
+    let shared = this.actorBandwidth.get(actor)
+    if (bandwidth && bandwidth > 0) {
+      if (!shared) {
+        shared = { schedule: new BandwidthSchedule(this.clock), active: 0 }
+        this.actorBandwidth.set(actor, shared)
+      }
+      shared.active++
+      limits.push({ rate: bandwidth, schedule: shared.schedule })
+    } else shared = undefined
     const activity = new Activity(
       kind,
       actor,
       total,
       termination ? AbortSignal.any([req.signal, termination]) : req.signal,
-      rates.length ? Math.min(...rates) : 0,
+      limits,
       () => {
         if (this.jobs.delete(activity.id)) {
+          if (shared) shared.active--
           Effect.runSync(this.permits.release(1))
           activity.finished.resolve()
         }
@@ -127,6 +192,7 @@ export class ActivityRegistry {
     const jobs = [...this.jobs.values()]
     for (const job of jobs) job.aborter.abort(new Error('Server shutting down'))
     await Promise.all(jobs.map((job) => job.finished.promise))
+    this.actorBandwidth.clear()
   }
   cancel(id: string) {
     const job = this.jobs.get(id)

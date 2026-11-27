@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { existsSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import {
   chmod,
   mkdtemp,
@@ -408,7 +409,9 @@ describe('publication and recovery contracts', () => {
     await writeFile(join(base, 'other', 'keep'), 'keep')
     await storage.operate('trash', ref('old'), null, allow)
     await storage.operate('trash', other('keep'), null, allow)
+    expect(storage.trashRetention('home')).toBeNull()
     storage.setTrashRetention('home', 0)
+    expect(storage.trashRetention('home')).toBe(0)
     expect(
       storage.trash((_act, r) => {
         if (r.mountId === 'other') throw new AppError(403, 'denied')
@@ -419,6 +422,8 @@ describe('publication and recovery contracts', () => {
       other('keep'),
     ])
     storage.setTrashRetention('other', null)
+    expect(storage.trashRetention('other')).toBeNull()
+    expect(() => storage.trashRetention('missing')).toThrow('Unknown storage')
     await storage.collectTrash(0)
     expect(storage.trash(allow)).toEqual([])
   })
@@ -799,5 +804,443 @@ describe('tracked upload retirement', () => {
     expect(state(id)).toBe('moving')
     expect(await readFile(join(stage, name), 'utf8')).toBe('different')
     expect(await readFile(join(home, 'keep'), 'utf8')).toBe('bytes')
+  })
+})
+
+describe('ordinary storage and conflict boundaries', () => {
+  test('resolves root metadata and rejects invalid read handles without exhausting later reads', async () => {
+    const root = await Effect.runPromise(storage.statTask(ref(), allow))
+    expect(root).toMatchObject({ name: 'Home', kind: 'directory', ref: ref() })
+    await expect(storage.openRead(ref(), allow)).rejects.toMatchObject({
+      status: 409,
+    })
+    await expect(storage.openRead(ref(''), allow)).rejects.toMatchObject({
+      status: 400,
+    })
+    await expect(storage.space('gone')).rejects.toMatchObject({ status: 404 })
+    expect(() => storage.setEnabled('gone', true)).toThrow('Unknown storage')
+    expect(() => storage.discardStage('home', 'invalid')).toThrow(
+      'Invalid operation ID',
+    )
+    await writeFile(join(home, 'next'), 'bytes')
+    const file = await storage.openRead(ref('next'), allow)
+    try {
+      expect(await file.handle.readFile('utf8')).toBe('bytes')
+    } finally {
+      await file.handle.close()
+    }
+  })
+  test('filename search skips unlisted subtrees and a file removed by a host writer during refresh', async () => {
+    const publicDir = join(home, 'public'),
+      privateDir = join(home, 'denied')
+    await mkdir(publicDir)
+    await mkdir(privateDir)
+    await writeFile(join(publicDir, 'target.txt'), 'visible')
+    await writeFile(join(privateDir, 'target.txt'), 'hidden')
+    await writeFile(join(home, 'target-old.txt'), 'obsolete')
+    const guard: Guard = (action, file) => {
+      if (action !== 'list') return
+      if (file.segments.includes('denied')) throw new AppError(403, 'denied')
+      if (file.segments.at(-1) === 'target-old.txt')
+        rmSync(join(home, 'target-old.txt'))
+    }
+    expect(
+      (await storage.search(ref(), 'TARGET', guard)).map((e) => e.ref),
+    ).toEqual([ref('public', 'target.txt')])
+    for (const query of ['  ', 's'.repeat(257)])
+      expect(() => storage.search(ref(), query, allow)).toThrow(
+        'Enter a filename search',
+      )
+    await expect(
+      storage.list(ref(), (action, r) => {
+        if (action === 'list' && r.segments.length)
+          throw new AppError(503, 'Rules unavailable')
+      }),
+    ).rejects.toMatchObject({ status: 503, message: 'Rules unavailable' })
+  })
+  test('a changed pinned file fails closed and can be reopened with a fresh grant', async () => {
+    const file = ref('report.txt')
+    await writeFile(join(home, 'report.txt'), 'draft')
+    const original = await storage.stat(file, allow)
+    const grant = Object.assign(() => {}, {
+      targetPins: [{ ref: file, version: original.version }],
+    })
+    await writeFile(join(home, 'report.txt'), 'published')
+    await expect(storage.openRead(file, grant)).rejects.toMatchObject({
+      status: 404,
+    })
+    expect((await storage.stat(file, allow)).size).toBe(9)
+  })
+  test('saturated mount queues reject excess work and recover admission once the queue drains', async () => {
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 264 }, () => storage.stat(ref(), allow)),
+    )
+    const full = outcomes.filter(
+      (item) =>
+        item.status === 'rejected' &&
+        item.reason instanceof AppError &&
+        item.reason.status === 503 &&
+        item.reason.message === 'Storage is busy',
+    )
+    expect(full.length).toBeGreaterThan(0)
+    expect(outcomes.some((row) => row.status === 'fulfilled')).toBe(true)
+    expect((await storage.stat(ref(), allow)).kind).toBe('directory')
+  })
+  test('invalid move destinations and ambiguous batches leave every original name unchanged', async () => {
+    await storage.createDir(ref('project'), allow)
+    const doc = ref('project', 'doc')
+    await writeFile(join(home, 'project', 'doc'), 'bytes')
+    expect(() => storage.operate('copy', doc, null, allow)).toThrow(
+      'Destination required',
+    )
+    expect(() => storage.operate('move', ref('project'), doc, allow)).toThrow(
+      'Choose a separate destination',
+    )
+    expect(() => storage.operate('rename', doc, other('doc'), allow)).toThrow(
+      'original directory',
+    )
+    expect(() =>
+      storage.operate('rename', doc, ref('elsewhere'), allow),
+    ).toThrow('original directory')
+    const same = { ref: doc, name: 'doc' }
+    for (const batch of [
+      [],
+      Array.from({ length: 257 }, () => same),
+      [same, same],
+      [same, { ref: ref('project', 'other'), name: 'doc' }],
+    ])
+      await expect(storage.bulkRename(batch, allow)).rejects.toMatchObject({
+        status: 400,
+      })
+    expect(await storage.bulkRename([same], allow)).toEqual([
+      { ...same, ok: true, result: doc },
+    ])
+    const cancelled = await storage.bulkRename(
+      [{ ref: doc, name: 'rename' }],
+      allow,
+      'reject',
+      AbortSignal.abort(),
+    )
+    expect(cancelled).toMatchObject([{ ok: false, status: 409 }])
+    expect(await readFile(join(home, 'project', 'doc'), 'utf8')).toBe('bytes')
+  })
+  test('an overwrite must target a regular file and a conditional edit requires an existing version', async () => {
+    const target = ref('project'),
+      id = await stage(target, 'draft')
+    await storage.createDir(target, allow)
+    await expect(
+      storage.commitStage(target, id, allow, 'overwrite'),
+    ).rejects.toMatchObject({ status: 409 })
+    await storage.operate('delete', target, null, allow)
+    await expect(
+      storage.commitStage(
+        target,
+        id,
+        allow,
+        'overwrite',
+        undefined,
+        'missing-version',
+      ),
+    ).rejects.toMatchObject({ status: 412 })
+    expect(await storage.commitStage(target, id, allow)).toEqual(target)
+  })
+  test('restore skip and overwrite respect a replacement file and retain trash until completion', async () => {
+    await writeFile(join(home, 'draft'), 'original')
+    await storage.operate('trash', ref('draft'), null, allow)
+    const item = storage.trash(allow)[0]
+    if (!item) throw new Error('Missing fixture')
+    await writeFile(join(home, 'draft'), 'replacement')
+    expect(await storage.restore(item.id, allow, 'skip')).toBeNull()
+    await expect(
+      storage.restore(
+        item.id,
+        (action) => {
+          if (action === 'modify') throw new AppError(403, 'Read only')
+        },
+        'overwrite',
+      ),
+    ).rejects.toMatchObject({ status: 403 })
+    expect(await readFile(join(home, 'draft'), 'utf8')).toBe('replacement')
+    expect(storage.trash(allow)).toEqual([item])
+    expect(await storage.restore(item.id, allow, 'overwrite')).toEqual(
+      ref('draft'),
+    )
+    expect(await readFile(join(home, 'draft'), 'utf8')).toBe('original')
+  })
+  test('a missing or replaced trash object is never restored or purged by mistake', async () => {
+    await writeFile(join(home, 'draft'), 'original')
+    await storage.operate('trash', ref('draft'), null, allow)
+    const item = storage.trash(allow)[0]
+    if (!item) throw new Error('Missing fixture')
+    const path = join(home, privateDir, 'trash', item.id)
+    await rename(path, path + '-previous')
+    await expect(storage.restore(item.id, allow)).rejects.toMatchObject({
+      status: 409,
+    })
+    await writeFile(path, 'replacement')
+    await expect(storage.purgeTrash(item.id, allow)).rejects.toMatchObject({
+      status: 409,
+    })
+    expect(await readFile(path, 'utf8')).toBe('replacement')
+    db.query("UPDATE fs_trash SET state='moving' WHERE id=?").run(item.id)
+    await expect(storage.list(ref(), allow)).rejects.toMatchObject({
+      status: 503,
+    })
+  })
+  test('rejects unknown or invalid retention and bounds very large trash listings', async () => {
+    expect(() => storage.setTrashRetention('absent', 0)).toThrow(
+      'Unknown storage',
+    )
+    expect(() => storage.setTrashRetention('home', -1)).toThrow(
+      'Invalid trash retention',
+    )
+    await expect(storage.collectTrash(-1)).rejects.toMatchObject({
+      status: 400,
+    })
+    db.exec(`WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<20001)
+      INSERT INTO fs_trash(id,mount,path,deleted,state,identity) SELECT CAST(n AS TEXT),'home','["old"]',n,'trashed','0:1' FROM seq`)
+    expect(() => storage.trash(allow)).toThrow('Trash listing limit exceeded')
+  })
+})
+
+describe('cross-mount copies under ordinary contention', () => {
+  test.each(['shorter', 'same length', 'after verification'] as const)(
+    'host edit (%s) keeps the destination unchanged and cleans private copy state',
+    async (moment) => {
+      const source = join(home, 'draft'),
+        target = join(base, 'other', 'draft')
+      await writeFile(source, 'initial')
+      await writeFile(target, 'keep')
+      let edited = false
+      const guard: Guard = (action, file) => {
+        if (action !== 'read' || file.mountId !== 'home' || edited) return
+        const stage = db
+          .query<{ id: string }, []>('SELECT id FROM fs_copy_stages LIMIT 1')
+          .get()
+        if (!stage) return
+        const temporary = join(base, 'other', privateDir, 'stage', stage.id)
+        if ((moment === 'after verification') !== existsSync(temporary)) return
+        edited = true
+        writeFileSync(source, moment === 'shorter' ? 'x' : 'revised')
+        utimesSync(source, new Date(2020, 0, 1), new Date(2020, 0, 1))
+      }
+      await expect(
+        storage.operate(
+          'copy',
+          ref('draft'),
+          other('draft'),
+          guard,
+          'overwrite',
+        ),
+      ).rejects.toMatchObject({
+        status: 409,
+        message: 'Source changed during copy',
+      })
+      expect(edited).toBe(true)
+      expect(await readFile(target, 'utf8')).toBe('keep')
+      expect(await readFile(source, 'utf8')).toBe(
+        moment === 'shorter' ? 'x' : 'revised',
+      )
+      expect(db.query('SELECT * FROM fs_copy_stages').all()).toEqual([])
+    },
+  )
+
+  test('cancellation after staging starts releases the staged copy without publishing it', async () => {
+    await writeFile(join(home, 'draft'), 'unchanged')
+    const controller = new AbortController()
+    const guard: Guard = (action) => {
+      if (
+        action === 'read' &&
+        db.query('SELECT id FROM fs_copy_stages LIMIT 1').get()
+      )
+        controller.abort()
+    }
+    await expect(
+      storage.operate(
+        'copy',
+        ref('draft'),
+        other('published'),
+        guard,
+        'reject',
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ status: 409 })
+    expect(await storage.list(other(), allow)).toEqual([])
+    expect(await readFile(join(home, 'draft'), 'utf8')).toBe('unchanged')
+    expect(db.query('SELECT * FROM fs_copy_stages').all()).toEqual([])
+  })
+  test('verified cross-mount move reports incomplete deletion when the source grant changes', async () => {
+    const target = join(base, 'other', 'result')
+    await writeFile(join(home, 'draft'), 'verified bytes')
+    await expect(
+      storage.operate('move', ref('draft'), other('result'), (action, file) => {
+        if (
+          action === 'delete' &&
+          file.mountId === 'home' &&
+          existsSync(target)
+        )
+          throw new AppError(403, 'Grant changed')
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message:
+        'Destination copied and verified. Source removal was incomplete.',
+    })
+    expect(await readFile(target, 'utf8')).toBe('verified bytes')
+    expect(await readFile(join(home, 'draft'), 'utf8')).toBe('verified bytes')
+  })
+  test('explicit cross-root overwrite checks destination modification rights before publication', async () => {
+    await writeFile(join(home, 'draft'), 'source')
+    await writeFile(join(base, 'other', 'saved'), 'old')
+    const checked: string[] = []
+    const result = await storage.operate(
+      'copy',
+      ref('draft'),
+      other('saved'),
+      (action, file) => {
+        if (action === 'modify')
+          checked.push(file.mountId + '/' + file.segments.join('/'))
+      },
+      'overwrite',
+    )
+    expect(result).toEqual(other('saved'))
+    expect(checked).toEqual(['other/saved', 'other/saved'])
+    expect(await readFile(join(base, 'other', 'saved'), 'utf8')).toBe('source')
+    expect(await readFile(join(home, 'draft'), 'utf8')).toBe('source')
+  })
+})
+
+describe('late operation outcomes', () => {
+  test('a host edit between recursive inventory and deletion preserves the revised file', async () => {
+    const file = join(home, 'record')
+    await writeFile(file, 'original')
+    let updated = false
+    await expect(
+      storage.operate('delete', ref('record'), null, (action) => {
+        if (action === 'delete' && !updated) {
+          updated = true
+          writeFileSync(file, 'new contents from host')
+        }
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: 'Entry changed during operation',
+    })
+    expect(await readFile(file, 'utf8')).toBe('new contents from host')
+  })
+  test.each(['before inventory', 'before publication'] as const)(
+    'cancelled cross-root copy (%s) leaves the original name and file intact',
+    async (when) => {
+      const source = ref('draft'),
+        dest = other('published'),
+        controller = new AbortController()
+      await writeFile(join(home, 'draft'), 'original bytes')
+      const guard: Guard = (action, file) => {
+        if (
+          when === 'before inventory' &&
+          action === 'create' &&
+          file.mountId === 'other' &&
+          file.segments.length
+        )
+          controller.abort()
+        if (when !== 'before publication' || action !== 'read') return
+        const copy = db
+          .query<{ id: string }, []>('SELECT id FROM fs_copy_stages LIMIT 1')
+          .get()
+        if (
+          copy &&
+          existsSync(join(base, 'other', privateDir, 'stage', copy.id))
+        )
+          controller.abort()
+      }
+      await expect(
+        storage.operate(
+          'copy',
+          source,
+          dest,
+          guard,
+          'reject',
+          controller.signal,
+        ),
+      ).rejects.toMatchObject({
+        status: 409,
+        message: 'Operation cancelled before publication',
+      })
+      expect(await storage.list(other(), allow)).toEqual([])
+      expect(await readFile(join(home, 'draft'), 'utf8')).toBe('original bytes')
+    },
+  )
+  test('upload recovery preserves the current final file and an independent unfinished stage', async () => {
+    const target = ref('published'),
+      file = join(home, 'published')
+    await writeFile(file, 'published')
+    const version = (await storage.stat(target, allow)).version
+    const identity = version.split(':').slice(0, 2).join(':')
+    const id = await stage(target, 'unpublished')
+    expect(await storage.recoverStage(target, id, identity)).toBe(false)
+    await link(file, join(home, 'host-copy'))
+    expect(await storage.recoverStage(target, id, identity)).toBe(false)
+    const staged = await storage.openStage('home', id)
+    try {
+      expect(await staged.readFile('utf8')).toBe('unpublished')
+    } finally {
+      await staged.close()
+    }
+    expect(await readFile(file, 'utf8')).toBe('published')
+    expect(await readFile(join(home, 'host-copy'), 'utf8')).toBe('published')
+  })
+  test('a directory occupying a staged-file slot cannot be published or discarded as a file', async () => {
+    const target = ref('draft'),
+      id = await stage(target, 'fixture')
+    const slot = join(home, privateDir, 'stage', id)
+    await rm(slot)
+    await mkdir(slot)
+    await expect(storage.commitStage(target, id, allow)).rejects.toMatchObject({
+      status: 409,
+      message: 'Invalid upload stage',
+    })
+    await expect(storage.discardStage('home', id)).rejects.toThrow()
+    expect(await storage.list(ref(), allow)).toEqual([])
+  })
+  test('purge forgets the row if the host already removed that trash item', async () => {
+    await writeFile(join(home, 'removed'), 'content')
+    await storage.operate('trash', ref('removed'), null, allow)
+    const item = storage.trash(allow)[0]
+    if (!item) throw new Error('Missing trash fixture')
+    await rm(join(home, privateDir, 'trash', item.id))
+    await storage.purgeTrash(item.id, allow)
+    expect(storage.trash(allow)).toEqual([])
+  })
+  test('keep-both reports exhaustion when every permitted numbered name already exists', async () => {
+    await writeFile(join(home, 'original.txt'), 'new')
+    const directory = join(base, 'other')
+    for (let first = 1; first <= 1000; first += 32) {
+      const names = Array.from(
+        { length: Math.min(32, 1001 - first) },
+        (_, index) => first + index,
+      )
+      await Promise.all(
+        names.map((n) =>
+          writeFile(
+            join(directory, n === 1 ? 'kept.txt' : 'kept (' + n + ').txt'),
+            'existing',
+          ),
+        ),
+      )
+    }
+    await expect(
+      storage.operate(
+        'copy',
+        ref('original.txt'),
+        other('kept.txt'),
+        allow,
+        'rename',
+      ),
+    ).rejects.toMatchObject({ status: 409, message: 'No available filename' })
+    expect(await readFile(join(directory, 'kept.txt'), 'utf8')).toBe('existing')
+    expect(await readFile(join(directory, 'kept (1000).txt'), 'utf8')).toBe(
+      'existing',
+    )
+    expect(await readFile(join(home, 'original.txt'), 'utf8')).toBe('new')
   })
 })

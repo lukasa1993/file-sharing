@@ -116,11 +116,17 @@ describe('file server over real HTTP', () => {
       headers: headers(),
       body: JSON.stringify({
         view: 'grid',
+        theme: 'dark',
         favorite: { mountId: 'e2e', segments: ['external'] },
       }),
     })
     expect(prefs.status).toBe(200)
     expect((await prefs.json()).view).toBe('grid')
+    const html = await (
+      await f.fetch('/_/files?mount=e2e', { headers: owner })
+    ).text()
+    expect(html).toContain('data-theme="dark"')
+    expect(html).toContain('data-display="grid"')
     const read = await f.fetch('/_/api/v1/preferences', { headers: owner })
     expect((await read.json()).favorites).toEqual([
       { mountId: 'e2e', segments: ['external'] },

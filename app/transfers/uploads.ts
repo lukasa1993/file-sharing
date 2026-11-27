@@ -131,12 +131,12 @@ export class Uploads {
     readonly db: Database,
     readonly fs: Filesystem,
     readonly jobs: ActivityRegistry,
-    options: TransferOptions,
+    options: Readonly<Required<TransferOptions>>,
     private readonly clock: Clock.Clock,
     private readonly timeouts: PreparationTimeouts,
   ) {
-    this.maxChunk = options.maxChunkBytes ?? 16 * 1024 * 1024
-    this.ttl = options.uploadTtlMs ?? 24 * 60 * 60 * 1000
+    this.maxChunk = options.maxChunkBytes
+    this.ttl = options.uploadTtlMs
     db.exec(`CREATE TABLE IF NOT EXISTS transfer_uploads (
       id TEXT PRIMARY KEY, actor TEXT NOT NULL, scope TEXT NOT NULL, mount TEXT NOT NULL, segments TEXT NOT NULL,
       bytes INTEGER NOT NULL, offset INTEGER NOT NULL DEFAULT 0, conflict TEXT NOT NULL, expected_digest TEXT,
@@ -568,7 +568,11 @@ export class Uploads {
     const maximum = Math.min(this.maxChunk, row.bytes - row.offset)
     if (declared !== null && numberHeader(declared, 'Content-Length') > maximum)
       throw new AppError(413, 'Chunk exceeds the available upload length.')
-    if (!req.body) return 0
+    if (!req.body) {
+      if (declared !== null && Number(declared) > 0)
+        throw new AppError(400, 'Incomplete request body.')
+      return 0
+    }
     const reader = req.body.getReader()
     let length = 0
     let cancellation: Promise<void> | undefined
@@ -756,7 +760,10 @@ export class Uploads {
       if (!(error instanceof AppError)) throw error
       return new Response(req.method === 'HEAD' ? null : error.message, {
         status: error.status,
-        headers: common,
+        headers:
+          req.method === 'HEAD'
+            ? common
+            : { ...common, 'Content-Type': 'text/plain; charset=utf-8' },
       })
     }
   }

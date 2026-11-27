@@ -1,6 +1,6 @@
-# Fileserver
+# lshare
 
-Fileserver shares ordinary files from existing storage roots. An owner can create a short download link, share selected items, or request uploads into a folder. Recipients can use the link in a browser. Files remain accessible to trusted applications on the host.
+lshare shares ordinary files from existing storage roots. An owner can create a short download link, share selected items, or request uploads into a folder. Recipients can use the link in a browser. Files remain accessible to trusted applications on the host.
 
 ## Local development
 
@@ -8,11 +8,11 @@ Use Bun 1.4.5 on Linux. Initialize disposable storage outside the checkout:
 
 ```sh
 bun install --frozen-lockfile
-bun run ops init /tmp/fileserver-dev owner
-export CONFIG_FILE=/tmp/fileserver-dev/config/mounts.json
-export DATA_DIR=/tmp/fileserver-dev/data
-export SESSION_SECRET_FILE=/tmp/fileserver-dev/config/session.key
-export BOOTSTRAP_FILE=/tmp/fileserver-dev/config/bootstrap.json
+bun run ops init /tmp/lshare-dev owner
+export CONFIG_FILE=/tmp/lshare-dev/config/mounts.json
+export DATA_DIR=/tmp/lshare-dev/data
+export SESSION_SECRET_FILE=/tmp/lshare-dev/config/session.key
+export BOOTSTRAP_FILE=/tmp/lshare-dev/config/bootstrap.json
 export PUBLIC_ORIGIN=http://127.0.0.1:8080
 bun run dev
 ```

@@ -1,5 +1,6 @@
 /** @jsxImportSource remix/component */
 import type { RemixNode } from 'remix/component'
+import type { AppConfig } from '../contracts.ts'
 import {
   appShell,
   csrfField,
@@ -23,6 +24,11 @@ function rows(data: unknown, key: string): DataRow[] {
 function str(v: unknown): string {
   return typeof v === 'string' || typeof v === 'number' ? String(v) : ''
 }
+function device(session: DataRow) {
+  const label = str(session.device) || 'Unknown device'
+  return session.current ? label + ' (this session)' : label
+}
+
 function settingsForm(
   csrf: string,
   endpoint: string,
@@ -39,7 +45,8 @@ function settingsForm(
       </summary>
       <form
         method="post"
-        action={endpoint}
+        action={endpoint === admin ? '/_/admin' : '/_/account'}
+        aria-label={title}
         data-json-form
         data-endpoint={endpoint}
       >
@@ -96,7 +103,11 @@ function table(title: string, headers: string[], data: RemixNode[][]) {
       <h2>{title}</h2>
       {data.length ? (
         <div class="table-scroll">
-          <table class="data-table">
+          <table
+            class={'data-table' + (headers.length > 3 ? ' mobile-records' : '')}
+            role="table"
+            aria-label={title}
+          >
             <thead>
               <tr>
                 {headers.map((h) => (
@@ -107,8 +118,15 @@ function table(title: string, headers: string[], data: RemixNode[][]) {
             <tbody>
               {data.map((row) => (
                 <tr>
-                  {row.map((value) => (
-                    <td>{value}</td>
+                  {row.map((value, index) => (
+                    <td>
+                      {headers.length > 3 ? (
+                        <span class="mobile-cell-label" aria-hidden="true">
+                          {headers[index]}
+                        </span>
+                      ) : null}
+                      {value}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -132,7 +150,7 @@ function quickAction(
   return (
     <form
       method="post"
-      action={endpoint}
+      action={endpoint === admin ? '/_/admin' : '/_/account'}
       data-json-form
       data-endpoint={endpoint}
       data-confirm={danger ? label : undefined}
@@ -165,7 +183,18 @@ const actions = [
   'share',
   'manage',
 ]
-export async function renderAdmin(page: Shell & { data: unknown }) {
+export async function renderAdmin(
+  page: Shell & {
+    data: unknown
+    retentionDays: number
+    runtime: {
+      version: string
+      platform: string
+      architecture: string
+      limits: NonNullable<AppConfig['transferLimits']>
+    }
+  },
+) {
   const form = settingsForm.bind(null, page.csrf),
     quick = quickAction.bind(null, page.csrf)
   const users = rows(page.data, 'users'),
@@ -184,7 +213,13 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
     })),
     groupOptions = groups.map((g) => ({ value: str(g.id), label: str(g.name) }))
   const mountOptions = page.mounts.map((m) => ({ value: m.id, label: m.label }))
+  const enabledAdmins = users.filter((u) => u.admin && u.enabled).length
   const storage = rows(page.data, 'mounts')
+  const caps = page.runtime.limits
+  const transferRate = transfers.reduce(
+    (total, t) => total + Number(t.bytesPerSecond || 0),
+    0,
+  )
   const area = (
     <div class="admin-layout">
       <nav class="subnav" aria-label="Administration sections">
@@ -203,12 +238,16 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
             u.admin ? 'Administrator' : 'Member',
             u.enabled ? 'Enabled' : 'Disabled',
             u.quota == null ? 'Unlimited' : sizeLabel(Number(u.quota)),
-            quick(
-              admin,
-              'setEnabled',
-              { userId: str(u.id), enabled: String(!u.enabled) },
-              u.enabled ? 'Disable' : 'Enable',
-              !!u.enabled,
+            u.admin && u.enabled && enabledAdmins === 1 ? (
+              <span class="quiet">Last administrator</span>
+            ) : (
+              quick(
+                admin,
+                'setEnabled',
+                { userId: str(u.id), enabled: String(!u.enabled) },
+                u.enabled ? 'Disable' : 'Enable',
+                !!u.enabled,
+              )
             ),
           ]),
         )}
@@ -285,10 +324,11 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
           <summary>Account sessions and tokens{icon('down', 15)}</summary>
           {table(
             'Signed-in sessions',
-            ['User', 'Last active (UTC)', 'Action'],
+            ['User', 'Device', 'Last active (UTC)', 'Action'],
             sessions.map((s) => [
               userOptions.find((u) => u.value === s.userId)?.label ||
                 str(s.userId),
+              device(s),
               dateLabel(Number(s.lastSeen)),
               quick(
                 admin,
@@ -433,7 +473,7 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
       <section id="roots">
         {table(
           'Storage roots',
-          ['Label', 'Mode', 'Availability', 'Free space'],
+          ['Label', 'Mode', 'Availability', 'Free space', 'Trash retention'],
           page.mounts.map((m) => {
             const info = storage.find((s) => s.id === m.id)
             return [
@@ -443,6 +483,9 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
                 ? 'Unavailable'
                 : 'Available',
               typeof info?.free === 'number' ? sizeLabel(info.free) : '—',
+              typeof info?.retentionMs === 'number'
+                ? String(info.retentionMs / 86400000) + ' days'
+                : String(page.retentionDays) + ' days (workspace default)',
             ]
           }),
         )}
@@ -484,6 +527,10 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
       <section id="activity">
         <section class="admin-section" id="admin-transfers">
           <h2>Live transfers</h2>
+          <p>
+            Aggregate bandwidth{' '}
+            <strong data-transfer-rate>{sizeLabel(transferRate)}/s</strong>
+          </p>
           <p data-transfer-empty class="quiet" hidden={transfers.length > 0}>
             No active transfers.
           </p>
@@ -556,18 +603,54 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
       </section>
       <section id="settings" class="admin-section">
         <h2>Settings</h2>
+        <section aria-label="Server configuration">
+          <h3>Server configuration</h3>
+          <dl class="profile">
+            <dt>Runtime</dt>
+            <dd>
+              Bun {page.runtime.version} · {page.runtime.platform}{' '}
+              {page.runtime.architecture}
+            </dd>
+            <dt>Concurrent transfers</dt>
+            <dd>
+              {caps.maxConcurrent} total, {caps.perActorConcurrent} per actor
+            </dd>
+            <dt>Maximum upload chunk</dt>
+            <dd>{sizeLabel(caps.maxChunkBytes)}</dd>
+            <dt>Per-transfer bandwidth</dt>
+            <dd>
+              {caps.bytesPerSecond
+                ? sizeLabel(caps.bytesPerSecond) + '/s'
+                : 'Unlimited'}
+            </dd>
+            <dt>Resumable upload expiry</dt>
+            <dd>{caps.uploadTtlMs / 1000} seconds</dd>
+          </dl>
+        </section>
         {form(
           admin,
           'setSettings',
           'Brand and retention',
           <>
-            {input('Workspace name', 'brand', 'text', false)}
-            {input(
-              'Trash retention (days)',
-              'trashRetentionDays',
-              'number',
-              false,
-            )}
+            <label>
+              Workspace name
+              <input
+                name="brand"
+                type="text"
+                maxLength={60}
+                value={page.brand}
+              />
+            </label>
+            <label>
+              Trash retention (days)
+              <input
+                name="trashRetentionDays"
+                type="number"
+                min="1"
+                max="3650"
+                value={page.retentionDays}
+              />
+            </label>
           </>,
           'Save settings',
         )}
@@ -581,17 +664,20 @@ export async function renderAdmin(page: Shell & { data: unknown }) {
     page.csrf,
     200,
     page.brand,
+    page.theme,
   )
 }
-export async function renderAccount(page: Shell & { data: unknown }) {
+export async function renderAccount(
+  page: Shell & { data: unknown; issuedToken?: string },
+) {
   const form = settingsForm.bind(null, page.csrf),
     quick = quickAction.bind(null, page.csrf)
   const sessions = rows(page.data, 'sessions'),
     tokens = rows(page.data, 'tokens')
   const body = (
     <div class="admin-layout">
-      <section class="admin-section">
-        <h2>Profile</h2>
+      <section class="admin-section" aria-labelledby="profile-heading">
+        <h2 id="profile-heading">Profile</h2>
         <dl class="profile">
           <dt>Username</dt>
           <dd>{page.user.username}</dd>
@@ -619,8 +705,9 @@ export async function renderAccount(page: Shell & { data: unknown }) {
       </section>
       {table(
         'Sessions',
-        ['Last active', 'Started', 'Action'],
+        ['Device', 'Last active', 'Started', 'Action'],
         sessions.map((s) => [
+          device(s),
           dateLabel(Number(s.lastSeen)),
           dateLabel(Number(s.createdAt)),
           quick(
@@ -665,14 +752,50 @@ export async function renderAccount(page: Shell & { data: unknown }) {
         <button type="submit">{icon('exit', 16)}Sign out</button>
       </form>
       {confirmDialog()}
+      {page.issuedToken ? (
+        <dialog open aria-labelledby="issued-token-heading">
+          <h2 id="issued-token-heading">New API token</h2>
+          <p>Copy this token now. It is shown once.</p>
+          <details>
+            <summary>Show token</summary>
+            <label>
+              API token
+              <input
+                type="text"
+                readOnly
+                autocomplete="off"
+                value={page.issuedToken}
+                data-new-token
+              />
+            </label>
+          </details>
+          <button type="button" data-copy-token>
+            Copy token
+          </button>
+          <form method="get" action="/_/account">
+            <button type="submit">Done</button>
+          </form>
+        </dialog>
+      ) : null}
       {dialog(
         'token-result',
         'New API token',
         <>
           <p>Copy this token now. It is shown once.</p>
-          <textarea readOnly data-new-token></textarea>
+          <label>
+            API token
+            <input type="password" readOnly autocomplete="off" data-new-token />
+          </label>
           <div class="dialog-actions">
-            <button data-close>Done</button>
+            <button type="button" data-show-token aria-pressed="false">
+              Show token
+            </button>
+            <button type="button" data-copy-token>
+              Copy token
+            </button>
+            <button type="button" data-close>
+              Done
+            </button>
           </div>
         </>,
       )}
@@ -684,5 +807,6 @@ export async function renderAccount(page: Shell & { data: unknown }) {
     page.csrf,
     200,
     page.brand,
+    page.theme,
   )
 }

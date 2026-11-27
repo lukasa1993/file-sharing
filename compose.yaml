@@ -5,6 +5,7 @@ services:
     environment:
       PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?Set the canonical public HTTPS origin}"
       PORT: "8080"
+      BRAND_ICON_FILE: "${BRAND_ICON_FILE:-}"
     ports:
       - "127.0.0.1:${FILES_PORT:-8080}:8080"
     volumes:

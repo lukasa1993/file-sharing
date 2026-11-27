@@ -105,6 +105,46 @@ describe('configuration and storage boundaries', () => {
         'Missing configuration',
       )
   })
+  test('serves a configured workspace PNG for the logo and favicon', async () => {
+    const file = join(state, 'config/workspace.png')
+    const pixel = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ2YAAAAASUVORK5CYII=',
+      'base64',
+    )
+    await writeFile(file, pixel)
+    const config = loadConfig({ ...env, BRAND_ICON_FILE: file })
+    const app = await createApp(config)
+    try {
+      const page = await app.fetch(new Request(env.PUBLIC_ORIGIN + '/login'))
+      const html = await page.text()
+      expect(html).toContain('rel="icon" href="/assets/workspace-icon"')
+      expect(html).toMatch(/<img\b[^>]*src="\/assets\/workspace-icon"[^>]*>/)
+      const icon = await app.fetch(
+        new Request(env.PUBLIC_ORIGIN + '/assets/workspace-icon'),
+      )
+      expect(icon.status).toBe(200)
+      expect(icon.headers.get('Content-Type')).toBe('image/png')
+      expect(await new Bun.Image(await icon.bytes()).metadata()).toMatchObject({
+        width: 1,
+        height: 1,
+        format: 'png',
+      })
+    } finally {
+      await app.close()
+    }
+    expect(() =>
+      loadConfig({ ...env, BRAND_ICON_FILE: 'workspace.png' }),
+    ).toThrow('absolute path')
+    const inMount = join(volume, 'workspace.png')
+    await writeFile(inMount, pixel)
+    expect(() => loadConfig({ ...env, BRAND_ICON_FILE: inMount })).toThrow(
+      'must be separate',
+    )
+    await writeFile(file, await new Bun.Image(pixel).webp().bytes())
+    await expect(
+      createApp(loadConfig({ ...env, BRAND_ICON_FILE: file })),
+    ).rejects.toThrow('requires a PNG')
+  })
   test('requires a secure origin without credentials or navigation components', () => {
     for (const url of [
       'not a url',

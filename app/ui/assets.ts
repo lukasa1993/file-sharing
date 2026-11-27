@@ -1,8 +1,9 @@
 import { basename, join, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export async function buildUiAssets(): Promise<Map<string, Blob>> {
-  const directory = process.env.UI_ASSETS_DIR
+export async function buildUiAssets(
+  directory = process.env.UI_ASSETS_DIR,
+): Promise<Map<string, Blob>> {
   if (directory) {
     if (!isAbsolute(directory))
       throw new Error('UI_ASSETS_DIR must be absolute.')

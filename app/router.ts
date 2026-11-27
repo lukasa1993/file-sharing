@@ -8,6 +8,7 @@ import { Stream } from 'effect'
 import {
   actions,
   AppError,
+  defaultBrand,
   type Entry,
   type ResourceRef,
   type User,
@@ -58,6 +59,7 @@ const routes = route({
   health: '/healthz',
   ready: '/readyz',
   assets: '/assets/:name.:extension',
+  workspaceIcon: '/assets/workspace-icon',
 })
 type Endpoint = { request: Request; url: URL }
 const safe = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -104,9 +106,27 @@ export async function appRouter(
   const assets = await buildUiAssets()
   const dir = new URL('../public/', import.meta.url)
   for (const file of await readdir(dir, { withFileTypes: true })) {
-    if (file.isFile() && /^[a-z0-9-]+\.(css|js|svg|woff2)$/.test(file.name)) {
-      assets.set(file.name, Bun.file(fileURLToPath(new URL(file.name, dir))))
+    if (
+      file.isFile() &&
+      /^[a-z0-9-]+\.(css|js|png|svg|webp|woff2)$/.test(file.name)
+    ) {
+      const asset = Bun.file(fileURLToPath(new URL(file.name, dir)))
+      assets.set(
+        file.name,
+        new Blob([await asset.arrayBuffer()], { type: asset.type }),
+      )
     }
+  }
+  let workspaceIcon = assets.get('lshare-mark.png')
+  if (!workspaceIcon) throw new Error('Missing workspace icon asset')
+  if (s.config.brandIcon) {
+    const image = new Bun.Image(s.config.brandIcon, { maxPixels: 512 * 512 })
+    const { format, width, height } = await image.metadata()
+    if (format !== 'png' || width > 512 || height > 512)
+      throw new Error('BRAND_ICON_FILE requires a PNG up to 512 × 512 pixels')
+    workspaceIcon = new Blob([Uint8Array.from(await image.png().bytes())], {
+      type: 'image/png',
+    })
   }
   const sessions = new WeakMap<Request, Access>()
   function access(ctx: Endpoint): Access {
@@ -164,11 +184,11 @@ export async function appRouter(
         throw new AppError(404, 'Page not found')
       if (!['GET', 'HEAD'].includes(ctx.request.method))
         throw new AppError(405, 'Method unavailable')
-      return s.shares.public(ctx.request, access(ctx))
+      return s.shares.public(ctx.request, access(ctx), brand())
     },
   })
   const current = (ctx: Endpoint) => mustUser(access(ctx))
-  const brand = () => s.meta.value('brand', 'Fileserver')
+  const brand = () => s.meta.value('brand', defaultBrand)
   function mounts(user: User) {
     return s.config.mounts
       .filter(
@@ -192,6 +212,7 @@ export async function appRouter(
       user,
       csrf: access(ctx).csrf,
       brand: brand(),
+      ...s.meta.displayPreferences(user.id),
       mounts: mounts(user),
       ...(home ? { home } : {}),
     }
@@ -259,6 +280,13 @@ export async function appRouter(
       ? Response.json({ status: 'ready' })
       : Response.json({ status: 'unavailable' }, { status: 503 })
   })
+  router.get(
+    routes.workspaceIcon,
+    () =>
+      new Response(workspaceIcon, {
+        headers: { 'Cache-Control': 'public, max-age=0, must-revalidate' },
+      }),
+  )
   router.get(routes.assets, (ctx) => {
     const asset = assets.get(`${ctx.params.name}.${ctx.params.extension}`)
     if (!asset) throw new AppError(404, 'Asset not found')
@@ -308,8 +336,7 @@ export async function appRouter(
         entries = entries.filter((e) =>
           e.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
         )
-      const sort = s.meta.sortPreference(model.user.id)
-      orderEntries(entries, sort)
+      orderEntries(entries, model.sort)
       const size = 100,
         page = Math.max(
           1,
@@ -376,9 +403,20 @@ export async function appRouter(
   router.get(routes.account, (ctx) =>
     renderAccount({ ...shell(ctx), data: s.identity.userData(current(ctx)) }),
   )
-  router.post(routes.profile, async (ctx) =>
-    Response.json(await s.identity.self(current(ctx), await data(ctx.request))),
-  )
+  const updateAccount = async (ctx: Endpoint, native: boolean) => {
+    const user = current(ctx)
+    const result = await s.identity.self(user, await data(ctx.request))
+    if (!native) return Response.json(result)
+    if (result.token)
+      return renderAccount({
+        ...shell(ctx),
+        data: s.identity.userData(user),
+        issuedToken: result.token,
+      })
+    return go('/_/account')
+  }
+  router.post(routes.account, (ctx) => updateAccount(ctx, true))
+  router.post(routes.profile, (ctx) => updateAccount(ctx, false))
   router.get(routes.preferences, (ctx) =>
     Response.json(
       s.meta.preferences(current(ctx).id, ownerGuard(s, current(ctx))),
@@ -401,7 +439,9 @@ export async function appRouter(
   router.post(routes.shareItem, shareOwner)
   router.patch(routes.shareItem, shareOwner)
   router.delete(routes.shareItem, shareOwner)
-  router.post(routes.unlock, (ctx) => s.shares.public(ctx.request, access(ctx)))
+  router.post(routes.unlock, (ctx) =>
+    s.shares.public(ctx.request, access(ctx), brand()),
+  )
   const download = (ctx: Endpoint) =>
     s.transfers.download(
       ctx.request,
@@ -467,7 +507,7 @@ export async function appRouter(
     const response = await s.transfers.upload(ctx.request, actor, id)
     response.headers.set(
       'Fileserver-Max-Chunk-Bytes',
-      String(s.config.transferLimits?.maxChunkBytes ?? 16 * 1024 * 1024),
+      String(s.transfers.limits.maxChunkBytes),
     )
     return response
   }
@@ -504,25 +544,34 @@ export async function appRouter(
     const user = adminUser(s, access(ctx))
     const states = await Promise.all(
       mounts(user).map(async (mount) => {
+        const retentionMs = s.fs.trashRetention(mount.id)
         try {
-          return { ...mount, ...(await s.fs.space(mount.id)), available: true }
+          return {
+            ...mount,
+            retentionMs,
+            ...(await s.fs.space(mount.id)),
+            available: true,
+          }
         } catch (error) {
           if (!(error instanceof AppError) || error.status !== 503) throw error
-          return { ...mount, available: false }
+          return { ...mount, retentionMs, available: false }
         }
       }),
     )
     return renderAdmin({
       ...shell(ctx),
+      runtime: {
+        version: Bun.version,
+        platform: process.platform,
+        architecture: process.arch,
+        limits: s.transfers.limits,
+      },
+      retentionDays: Number(s.meta.value('trashRetentionDays', '30')),
       data: {
         ...s.identity.adminData(user),
         mounts: states,
         transfers: s.transfers.active(),
         activity: s.meta.activity(),
-        settings: {
-          brand: brand(),
-          trashRetentionDays: s.meta.value('trashRetentionDays', '30'),
-        },
       },
     })
   })
@@ -546,14 +595,27 @@ export async function appRouter(
       {
         headers: {
           'Content-Disposition':
-            'attachment; filename="fileserver-diagnostics.json"',
+            'attachment; filename="lshare-diagnostics.json"',
         },
       },
     )
   })
-  router.post(routes.settings, async (ctx) => {
+  const updateAdmin = async (ctx: Endpoint, native: boolean) => {
     const user = adminUser(s, access(ctx)),
       fields = await data(ctx.request)
+    if (native) {
+      if (typeof fields.principal === 'string') {
+        const [type, id] = fields.principal.split(':')
+        fields.subjectType = type
+        fields.subjectId = id
+      }
+      if (fields.enabled === 'keep') delete fields.enabled
+      else if (fields.enabled === 'true' || fields.enabled === 'false')
+        fields.enabled = fields.enabled === 'true'
+      for (const key of ['brand', 'label', 'trashRetentionDays'])
+        if (fields[key] === '') delete fields[key]
+      if (fields.retentionDays === '') fields.retentionDays = null
+    }
     switch (fields.action) {
       case 'cancelTransfer':
         if (typeof fields.id !== 'string' || !s.transfers.cancel(fields.id))
@@ -620,7 +682,9 @@ export async function appRouter(
         }
         await s.identity.manage(user, fields)
     }
-    return Response.json({ ok: true })
-  })
+    return native ? go('/_/admin') : Response.json({ ok: true })
+  }
+  router.post(routes.admin, (ctx) => updateAdmin(ctx, true))
+  router.post(routes.settings, (ctx) => updateAdmin(ctx, false))
   return router
 }

@@ -9,6 +9,7 @@ import { Downloads, type DownloadOptions } from './downloads.ts'
 import { Uploads, type UploadAccess } from './uploads.ts'
 import {
   ActivityRegistry,
+  defaultTransferLimits,
   type TransferOptions,
   type PreparationTimeouts,
 } from './streams.ts'
@@ -17,6 +18,7 @@ import { TEXT_LIMIT, textExtensions } from './preview.ts'
 export type { DownloadOptions, UploadAccess, TransferOptions }
 
 export class Transfers {
+  readonly limits: Readonly<Required<TransferOptions>>
   private readonly timeouts: PreparationTimeouts = new WeakMap()
   private readonly jobs: ActivityRegistry
   private readonly downloads: Downloads
@@ -34,9 +36,17 @@ export class Transfers {
       )
         throw new Error('Invalid transfer option: ' + name)
     }
-    this.jobs = new ActivityRegistry(options)
+    this.limits = Object.freeze({ ...defaultTransferLimits, ...options })
+    this.jobs = new ActivityRegistry(this.limits, clock)
     this.downloads = new Downloads(fs, this.jobs, this.timeouts)
-    this.uploads = new Uploads(db, fs, this.jobs, options, clock, this.timeouts)
+    this.uploads = new Uploads(
+      db,
+      fs,
+      this.jobs,
+      this.limits,
+      clock,
+      this.timeouts,
+    )
   }
 
   setPreparationTimeout(

@@ -11,7 +11,18 @@ describe('public entry', () => {
     await app.open('/')
     const response = await request.get(await browser.url())
 
+    const mark = await browser.evaluate(async () => {
+      const logo = document.querySelector<HTMLImageElement>('img.brandmark')
+      const favicon =
+        document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+      if (!logo || !favicon) return false
+      await logo.decode()
+      return logo.naturalWidth > 0 && logo.src === favicon.href
+    })
+
     expect(response).toBeOK()
+    expect(mark).toBe(true)
+    await expect(browser).toHaveTitle('Sign in · lshare')
     await expect(screen.getByRole('heading', 'Sign in')).toBeVisible()
   })
 })

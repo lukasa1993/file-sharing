@@ -429,6 +429,11 @@ describe('resumable uploads and publication', () => {
     for (const value of [
       '',
       'filename Zg==',
+      'mount ZmlsZXM=',
+      'mount ZmlsZXM=,filename',
+      meta +
+        ',path ' +
+        Buffer.from(Array(129).fill('a').join('/')).toString('base64'),
       'mount ZmlsZXM=,filename /w==',
       meta + ',filename Zg==',
       meta + ',x z',
@@ -445,6 +450,87 @@ describe('resumable uploads and publication', () => {
         .query<{ n: number }, []>('SELECT count(*) n FROM transfer_uploads')
         .get()?.n,
     ).toBe(0)
+  })
+  test('chunk framing and method errors preserve the last confirmed offset', async () => {
+    const id = uploadId(await create('framed', 5))
+    const send = (
+      method: string,
+      headers: Record<string, string>,
+      body?: string,
+      item = id,
+    ) =>
+      transfers.upload(
+        new Request(base + '/_/uploads/' + item, {
+          method,
+          headers: { ...tus, ...headers },
+          ...(body === undefined ? {} : { body }),
+        }),
+        owner,
+        item,
+      )
+    const chunk = {
+      'Content-Type': 'application/offset+octet-stream',
+      'Upload-Offset': '0',
+    }
+    expect((await send('GET', {})).status).toBe(405)
+    expect((await send('HEAD', {}, undefined, 'unknown')).status).toBe(404)
+    expect(
+      (await send('PATCH', { ...chunk, 'Content-Type': 'text/plain' }, 'abc'))
+        .status,
+    ).toBe(415)
+    expect(
+      (await send('PATCH', { ...chunk, 'Content-Length': '10' }, 'abc')).status,
+    ).toBe(413)
+    expect(
+      (await send('PATCH', { ...chunk, 'Content-Length': '4' }, 'abc')).status,
+    ).toBe(400)
+    expect(
+      (await send('PATCH', { ...chunk, 'Content-Length': '2' })).status,
+    ).toBe(400)
+    expect(
+      (await send('PATCH', { ...chunk, 'Content-Length': '0' })).status,
+    ).toBe(204)
+    expect((await head(id)).headers.get('Upload-Offset')).toBe('0')
+    expect((await patch(id, 0, 'abcde')).status).toBe(204)
+    const finished = await send('DELETE', {})
+    expect(finished.status).toBe(409)
+    expect(finished.headers.get('Content-Type')).toStartWith('text/plain')
+    expect(await readFile(join(root, 'framed'), 'utf8')).toBe('abcde')
+  })
+  test('a missing or shortened stage fails a PATCH locally and extra unacknowledged bytes are replaced', async () => {
+    for (const kind of ['missing', 'short', 'extra']) {
+      const id = uploadId(await create(kind, 5))
+      expect((await patch(id, 0, 'abc')).status).toBe(204)
+      if (kind === 'missing') await fs.discardStage('files', id)
+      else {
+        const handle = await fs.openStage('files', id)
+        try {
+          await handle.truncate(kind === 'short' ? 2 : 12)
+        } finally {
+          await handle.close()
+        }
+      }
+      const response = await patch(id, 3, 'de')
+      if (kind === 'extra') {
+        expect(response.status).toBe(204)
+        expect(await readFile(join(root, kind), 'utf8')).toBe('abcde')
+      } else {
+        expect(response.status).toBe(409)
+        expect((await head(id)).headers.get('Upload-State')).toBe('failed')
+        await expect(stat(join(root, kind))).rejects.toThrow()
+      }
+    }
+  })
+  test('startup reconciles an interrupted skip without touching existing bytes', async () => {
+    await writeFile(join(root, 'original'), 'retained')
+    const id = uploadId(await create('original', 3, { conflict: 'skip' }))
+    db.query("UPDATE transfer_uploads SET state='skipping' WHERE id=?").run(id)
+    await transfers.cleanup()
+    const acknowledged = await head(id)
+    expect(acknowledged.headers.get('upload-state')).toBe('skipped')
+    expect(acknowledged.headers.get('upload-offset')).toBe('3')
+    await expect(fs.openStage('files', id)).rejects.toThrow()
+    expect(await readFile(join(root, 'original'), 'utf8')).toBe('retained')
   })
   test('credits verified permanent removal while retaining storage charges in trash and after unrelated replacement', async () => {
     const limited = { ...owner, quota: 3 }

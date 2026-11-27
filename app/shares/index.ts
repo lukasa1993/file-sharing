@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { Clock, Effect } from 'effect'
 import { attempt, runTask } from '../effects.ts'
-import { AppError, type Entry, type User } from '../contracts'
+import { AppError, defaultBrand, type Entry, type User } from '../contracts'
 import type { Transfers } from '../transfers'
 import { renderPublicShare } from '../ui'
 import {
@@ -125,7 +125,12 @@ export class Shares extends ShareStore {
     return method(id ? 'GET, PATCH, DELETE' : 'GET, POST')
   }
 
-  private async unlock(request: Request, id: string, access: ShareSession) {
+  private async unlock(
+    request: Request,
+    id: string,
+    access: ShareSession,
+    brand: string,
+  ) {
     if (request.method !== 'POST') return method('POST')
     const s = this.byId(id)
     this.requireActive(s)
@@ -152,6 +157,17 @@ export class Shares extends ShareStore {
     )
       throw new AppError(429, 'Too many attempts. Try again later.')
     const form = new URLSearchParams(await readBody(request, 4096))
+    const base = '/' + s.alias
+    const candidate = form.get('returnTo') ?? base
+    let location = base
+    if (candidate.startsWith('/') && URL.canParse(candidate, request.url)) {
+      const dest = new URL(candidate, request.url)
+      if (
+        dest.origin === new URL(request.url).origin &&
+        (dest.pathname === base || dest.pathname.startsWith(base + '/'))
+      )
+        location = dest.pathname + dest.search
+    }
     const password = form.get('password')
     if (!password || Buffer.byteLength(password) > 512)
       throw new AppError(400, 'Enter the share password.')
@@ -172,6 +188,8 @@ export class Shares extends ShareStore {
         id: s.id,
         csrf: access.csrf,
         unlockUrl: '/_/shares/' + s.id + '/unlock',
+        returnTo: location,
+        brand,
         error: 'Incorrect password.',
         status: 403,
       })
@@ -196,17 +214,6 @@ export class Shares extends ShareStore {
           s.expiresAt ? Date.parse(s.expiresAt) : Infinity,
         ),
       )
-    const base = '/' + s.alias
-    const candidate = form.get('returnTo') ?? base
-    let location = base
-    if (candidate.startsWith('/') && URL.canParse(candidate, request.url)) {
-      const dest = new URL(candidate, request.url)
-      if (
-        dest.origin === new URL(request.url).origin &&
-        (dest.pathname === base || dest.pathname.startsWith(base + '/'))
-      )
-        location = dest.pathname + dest.search
-    }
     return new Response(null, { status: 303, headers: { Location: location } })
   }
 
@@ -258,10 +265,14 @@ export class Shares extends ShareStore {
     }
   }
 
-  async public(request: Request, access: ShareSession): Promise<Response> {
+  async public(
+    request: Request,
+    access: ShareSession,
+    brand = defaultBrand,
+  ): Promise<Response> {
     const url = new URL(request.url)
     const unlock = /^\/_\/shares\/([^/]+)\/unlock$/.exec(url.pathname)
-    if (unlock?.[1]) return this.unlock(request, unlock[1], access)
+    if (unlock?.[1]) return this.unlock(request, unlock[1], access, brand)
     if (request.method !== 'GET' && request.method !== 'HEAD')
       return method('GET, HEAD')
     const parts = publicPath(request)
@@ -269,7 +280,7 @@ export class Shares extends ShareStore {
     if (!alias) throw unavailable()
     const s = this.byAlias(alias)
     this.requireActive(s)
-    const common = { alias, id: s.id, csrf: access.csrf }
+    const common = { alias, id: s.id, csrf: access.csrf, brand }
     try {
       this.authorize(s, access)
     } catch (error) {

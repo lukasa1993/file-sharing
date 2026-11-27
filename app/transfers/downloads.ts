@@ -196,12 +196,13 @@ export class Downloads {
           'Content-Disposition',
           disposition(entry.name, Boolean(representation)),
         )
-        if (preview && representation?.type === 'text/plain') {
+        if (
+          preview &&
+          representation?.type === 'text/plain' &&
+          textExtensions.has(extname(entry.name).toLowerCase())
+        ) {
           response.headers.set('X-File-Version', entry.version)
-          if (
-            textExtensions.has(extname(entry.name).toLowerCase()) &&
-            entry.size > TEXT_LIMIT
-          )
+          if (entry.size > TEXT_LIMIT)
             response.headers.set('X-Preview-Truncated', 'true')
         }
         if (stream) options.onStart?.('"' + sha + '"')

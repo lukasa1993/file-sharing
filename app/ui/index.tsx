@@ -7,6 +7,7 @@ import {
   signedOut,
   sizeLabel,
 } from './base'
+import { defaultBrand } from '../contracts'
 import { uploadInputs } from './files'
 import { PasswordField } from './login-client'
 
@@ -14,73 +15,11 @@ export * from './files'
 export * from './account'
 export { buildUiAssets } from './assets'
 
-function illustration() {
-  return (
-    <svg
-      class="folder-illustration"
-      viewBox="0 0 440 330"
-      aria-hidden="true"
-      fill="none"
-    >
-      <defs>
-        <pattern
-          id="paper-dots"
-          width="9"
-          height="9"
-          patternUnits="userSpaceOnUse"
-        >
-          <circle cx="1" cy="1" r=".85" fill="#789888" />
-        </pattern>
-      </defs>
-      <path fill="url(#paper-dots)" d="M0 0h440v330H0z" />
-      <g stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">
-        <path
-          fill="#264c40"
-          stroke="#aac4a7"
-          d="m68 109 109-32 29 10 105-30 55 23-5 141-217 62-33-12z"
-        />
-        <path
-          fill="#daead4"
-          stroke="#283e33"
-          d="m88 111 204-59 47 20-201 61z"
-        />
-        <path
-          fill="#bacfb1"
-          stroke="#283e33"
-          d="m105 121 205-60 32 14-205 60z"
-        />
-        <path
-          fill="#eff0d8"
-          stroke="#283e33"
-          d="m115 131 205-60 29 13-204 60z"
-        />
-        <path
-          fill="#acc5a0"
-          stroke="#283e33"
-          d="m125 147 206-61 17 8-203 61z"
-        />
-        <path
-          fill="#9fbc94"
-          stroke="#c8dbc1"
-          d="m107 145 33 8 9 115-16 8-31-136z"
-        />
-        <path
-          fill="#b7d7aa"
-          stroke="#d3e7cc"
-          d="m134 154 73-21 13-14 139-40-11 143-200 59z"
-        />
-        <path stroke="#70936a" d="m157 256 173-51m-173 57 173-51" />
-        <path fill="#496b4e" stroke="none" d="m160 183 68-20-.6 7-67 20z" />
-        <path fill="#83a77a" stroke="none" d="m160 196 39-11-.4 4-39 11z" />
-      </g>
-    </svg>
-  )
-}
 export async function renderLogin({
   csrf,
   error,
   next,
-  brand = 'Fileserver',
+  brand = defaultBrand,
 }: {
   csrf: string
   error?: string
@@ -103,15 +42,17 @@ export async function renderLogin({
               Username
               <input
                 name="username"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? 'login-error' : undefined}
                 required
                 autocomplete="username"
                 autocapitalize="none"
                 spellcheck={false}
               />
             </label>
-            <PasswordField />
+            <PasswordField invalid={Boolean(error)} />
             {error ? (
-              <p class="error" role="alert">
+              <p id="login-error" class="error" role="alert">
                 {error}
               </p>
             ) : null}
@@ -126,9 +67,7 @@ export async function renderLogin({
             </p>
           </div>
         </section>
-        <aside class="auth-art" aria-hidden="true">
-          {illustration()}
-        </aside>
+        <aside class="auth-art" aria-hidden="true" />
         <script type="module" src="/assets/hydrate-login.js"></script>
       </div>,
     ),
@@ -160,7 +99,7 @@ export type PublicSharePage = {
   status?: number
 }
 export async function renderPublicShare(p: PublicSharePage) {
-  const brand = p.brand || 'Fileserver'
+  const brand = p.brand || defaultBrand
   const grant = p.kind === 'unlock',
     upload = p.kind === 'upload',
     collection = p.kind === 'selection' || p.kind === 'directory'
@@ -174,10 +113,19 @@ export async function renderPublicShare(p: PublicSharePage) {
         {icon(grant ? 'lock' : upload ? 'upload' : 'share', 16)}
         {grant ? 'Protected link' : upload ? 'File request' : 'Shared with you'}
       </span>
-      {p.kind === 'file' ? entryBadge(p.title, false, true) : null}
-      <h1>{p.title}</h1>
+      {p.kind === 'file' ? (
+        <div class="shared-file">
+          {entryBadge(p.title, false, true)}
+          <div>
+            <h1>{p.title}</h1>
+            <p>{sizeLabel(p.size)} · File download</p>
+          </div>
+        </div>
+      ) : (
+        <h1>{p.title}</h1>
+      )}
       {p.error ? (
-        <p role="alert" class="error">
+        <p id="share-error" role="alert" class="error">
           {p.error}
         </p>
       ) : null}
@@ -195,6 +143,8 @@ export async function renderPublicShare(p: PublicSharePage) {
               type="password"
               required
               name="password"
+              aria-invalid={p.error ? true : undefined}
+              aria-describedby={p.error ? 'share-error' : undefined}
               autocomplete="current-password"
             />
           </label>
@@ -205,7 +155,6 @@ export async function renderPublicShare(p: PublicSharePage) {
       ) : null}
       {p.kind === 'file' && p.downloadUrl ? (
         <>
-          <p>{sizeLabel(p.size)} · File download</p>
           <a
             class="button primary"
             href={p.downloadUrl}
@@ -257,8 +206,8 @@ export async function renderPublicShare(p: PublicSharePage) {
       {upload ? (
         <>
           <p>
-            Choose the files you want to send. Only the owner can see files in
-            this folder.
+            Choose files or a folder to send. This upload link keeps the
+            folder’s contents private.
           </p>
           <div class="upload-drop" data-drop-target>
             {icon('upload', 32)}
@@ -287,7 +236,7 @@ export async function renderPublicShare(p: PublicSharePage) {
 export async function renderError({
   status,
   message,
-  brand = 'Fileserver',
+  brand = defaultBrand,
 }: {
   status: number
   message: string

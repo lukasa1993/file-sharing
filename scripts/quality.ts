@@ -5,23 +5,7 @@ import { readFileSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import ts from 'typescript'
 
-const critical =
-  /^(?:server\.ts$|app\/(application|config|filesystem|http|identity|inspection|metadata|operations|proxy|router|runtime|security|shares|transfers|transport)(?:\/|\.))/
-const production = /^(app\/.*\.[cm]?[jt]sx?|public\/.*\.[cm]?js|server\.ts)$/
-
-async function sourceFiles() {
-  const files = ['server.ts']
-  for (const folder of ['app', 'public']) {
-    for await (const entry of new Bun.Glob('**/*').scan({
-      cwd: folder,
-      onlyFiles: true,
-    })) {
-      const path = folder + '/' + entry
-      if (production.test(path) && !path.endsWith('.d.ts')) files.push(path)
-    }
-  }
-  return files.sort()
-}
+import { critical, sourceFiles } from './quality-sources.ts'
 
 async function command(args: string[], env = process.env) {
   const child = Bun.spawn(args, {
@@ -194,82 +178,6 @@ async function lint() {
     `Checked ${files.length} production modules, ${issues.length} lint finding(s).`,
   )
   return issues.length ? 1 : 0
-}
-
-async function coverage() {
-  const report = '.quality/coverage/lcov.info'
-  await rm(report, { force: true })
-  const run = await command([
-    'bun',
-    'test',
-    '--coverage',
-    '--coverage-reporter=lcov',
-    '--coverage-dir=.quality/coverage',
-  ])
-  if (run !== 0) return run
-  const records = (await readFile(report, 'utf8')).split('end_of_record')
-  const included = new Set<string>()
-  let lines = 0,
-    hits = 0,
-    branches = 0,
-    coveredBranches = 0
-  for (const record of records) {
-    const raw = /^SF:(.+)$/m.exec(record)?.[1]
-    if (!raw) continue
-    const path = relative(process.cwd(), resolve(raw.trim()))
-    if (!production.test(path)) continue
-    included.add(path)
-    let fileMissed = 0
-    for (const hit of record.matchAll(/^DA:\d+,(\d+)/gm)) {
-      lines++
-      if (Number(hit[1])) hits++
-      else fileMissed++
-    }
-    for (const b of record.matchAll(/^BRDA:\d+,[^,]+,[^,]+,(-|\d+)/gm)) {
-      branches++
-      if (Number(b[1]) > 0) coveredBranches++
-    }
-    if (critical.test(path) && fileMissed)
-      console.warn(
-        `${path}: ${fileMissed} uncovered critical lines (target 100%).`,
-      )
-  }
-  // Omitted modules never count as covered. Type-only modules emit empty JavaScript.
-  const missing: string[] = []
-  for (const file of await sourceFiles()) {
-    if (included.has(file)) continue
-    const code = await readFile(file, 'utf8')
-    const js = ts
-      .transpileModule(code, {
-        fileName: file,
-        compilerOptions: {
-          target: ts.ScriptTarget.ESNext,
-          jsx: ts.JsxEmit.Preserve,
-          removeComments: true,
-          module: ts.ModuleKind.ESNext,
-        },
-      })
-      .outputText.trim()
-    if (js && js !== 'export {};') missing.push(file)
-  }
-  if (missing.length)
-    console.error('Executable files absent from LCOV: ' + missing.join(', '))
-  console.log(`Covered production lines: ${hits}/${lines} (minimum 90%).`)
-  if (branches)
-    console.log(
-      `Covered branches: ${coveredBranches}/${branches} (minimum 85%).`,
-    )
-  else
-    console.error(
-      'Branch coverage unavailable: this Bun LCOV report contains no branch counters. The 85% gate is unverified.',
-    )
-  return missing.length ||
-    !lines ||
-    hits / lines < 0.9 ||
-    !branches ||
-    coveredBranches / branches < 0.85
-    ? 1
-    : 0
 }
 
 function gitPaths(args: string[]) {
@@ -463,7 +371,10 @@ switch (Bun.argv[2]) {
     process.exitCode = await lint()
     break
   case 'coverage':
-    process.exitCode = await coverage()
+    process.exitCode = await command([
+      process.execPath,
+      'scripts/coverage/run.mjs',
+    ])
     break
   case 'mutation-matrix':
     console.log(JSON.stringify(await mutationMatrix(Bun.argv[3] === 'all')))

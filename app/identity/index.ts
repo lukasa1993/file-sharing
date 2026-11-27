@@ -84,6 +84,37 @@ function booleanValue(v: unknown) {
     return false
   throw bad('Invalid switch value.')
 }
+// Store only coarse, self-reported device information so a user can recognize a session.
+function deviceLabel(agent: string | null) {
+  const value = (agent ?? '').slice(0, 512)
+  const browser = /Edg(?:e|A|iOS)?\//.test(value)
+    ? 'Edge'
+    : /Firefox\/|FxiOS\//.test(value)
+      ? 'Firefox'
+      : /Chrome\/|Chromium\/|CriOS\//.test(value)
+        ? 'Chrome'
+        : /Safari\//.test(value)
+          ? 'Safari'
+          : undefined
+  const platform = /Android/.test(value)
+    ? 'Android'
+    : /iPhone|iPad|iPod/.test(value)
+      ? 'iOS'
+      : /Windows/.test(value)
+        ? 'Windows'
+        : /CrOS/.test(value)
+          ? 'ChromeOS'
+          : /Macintosh|Mac OS X/.test(value)
+            ? 'macOS'
+            : /Linux/.test(value)
+              ? 'Linux'
+              : undefined
+  return [browser, platform].filter(Boolean).join(' on ') || 'Unknown device'
+}
+
+const sessionFields = `publicId AS id,userId,createdAt,lastSeen,id=? AS current,
+  CASE WHEN json_valid(data) THEN json_extract(data,'$[0].device') END AS device`
+
 function validPassword(v: unknown): v is string {
   return (
     typeof v === 'string' &&
@@ -538,6 +569,7 @@ export class Identity {
     }
     const session = completeAuth(ctx)
     session.set('userId', account.id)
+    session.set('device', deviceLabel(request.headers.get('User-Agent')))
     session.unset('_csrf')
     getCsrfToken(ctx)
     const value = await this.storage.save(session)
@@ -607,9 +639,9 @@ export class Identity {
         .all(),
       sessions: this.db
         .query(
-          'SELECT publicId AS id,userId,createdAt,lastSeen FROM auth_sessions WHERE userId IS NOT NULL ORDER BY lastSeen DESC LIMIT 500',
+          `SELECT ${sessionFields} FROM auth_sessions WHERE userId IS NOT NULL ORDER BY lastSeen DESC LIMIT 500`,
         )
-        .all(),
+        .all(this.contextsByUser.get(actor) ?? null),
       tokens: this.db
         .query(
           'SELECT id,userId,label,scope,expiresAt FROM auth_tokens ORDER BY expiresAt DESC LIMIT 500',
@@ -629,9 +661,9 @@ export class Identity {
     return {
       sessions: this.db
         .query(
-          'SELECT publicId AS id,userId,createdAt,lastSeen FROM auth_sessions WHERE userId=? ORDER BY lastSeen DESC',
+          `SELECT ${sessionFields} FROM auth_sessions WHERE userId=? ORDER BY lastSeen DESC`,
         )
-        .all(user.id),
+        .all(this.contextsByUser.get(user) ?? null, user.id),
       tokens: this.db
         .query(
           'SELECT id,userId,label,scope,expiresAt FROM auth_tokens WHERE userId=? ORDER BY expiresAt DESC',

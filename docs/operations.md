@@ -1,4 +1,4 @@
-# Operating the file server
+# Operating lshare
 
 ## Initialize a host
 
@@ -13,6 +13,8 @@ bun scripts/ops.ts init "$FILES_STATE" operator --container
 The command creates a sample writable storage directory, its mount identity marker, a signing key, and a random first-use password in the private file `config/bootstrap.json`. Read that file from the host when logging in as the first administrator. Keep it protected until the first account exists, then move it to secure storage or remove it. The app reads bootstrap credentials only when the account table is empty.
 
 The supplied container serves the initialized storage at `/srv/files`. To serve additional existing folders, configure separate bind mounts with `create_host_path: false`, choose non-overlapping container paths, and add an entry to `config/mounts.json` for each. Each record has `id`, `label`, `path`, `readOnly`, and `sentinel`. Place the same sentinel string in a regular file named `.fileserver-root` on the intended mounted volume. Prepare this marker on the writable host before attaching a read-only mount. Keep metadata, backup files, and signing secrets outside every shared root.
+
+Set the workspace name in Administration. To use your own logo and favicon, place a PNG up to 512 × 512 pixels and 256 KiB outside all shared roots, set `BRAND_ICON_FILE` to its absolute path and restart. With Compose, place the image in the host's `config` directory and use its container path, for example `/etc/fileserver/workspace.png`. The same icon appears on signed-in and recipient pages.
 
 ## Start and stop
 
@@ -61,7 +63,7 @@ The [build specification](FILE_SERVER_BUILD_SPEC.md) and [Effect addendum](EFFEC
 
 The disposable E2E wrapper creates a temporary SQLite database, root, credentials, and shareable file. It starts the server on loopback, runs the requested tests, and removes the instance. Run `bun run test:e2e:fixture tests/example.e2e.ts` for the browser smoke check, or `bun run test:e2e:fixture` for the full browser suite after signing in. See the [test setup](../tests/README.md).
 
-`bun run coverage` checks native LCOV line counts and reports missing executable modules. The line threshold is 90% and the branch threshold is 85%. A report without branch counters leaves the branch gate unverified and returns failure. Bun 1.4.5 omits branch counters from its LCOV writer. The current provider decision and upstream source are recorded in the [implementation status](implementation-status.md).
+`bun run coverage` measures all production TypeScript, TSX and browser JavaScript with IstanbulJS under the pinned Bun runtime and Chromium. It includes the real browser handoff by default. Set `FILESERVER_COVERAGE_DETERMINISTIC=1` for a run without subscription-dependent tests. Open `.quality/coverage/index.html` for the annotated source or inspect `.quality/coverage/evidence.json` for inputs, failed suites and missing process or browser measurements. The thresholds are 90% line coverage and 85% branch coverage.
 
 `bun run mutation` selects changed production modules against `MUTATION_BASE` (defaults to `HEAD`, including untracked files). `bun run mutation:all` runs the entire production module set. Stryker uses the Bun test command runner and retains an incremental cache and JSON report in `.quality/mutation/`. Review individual survivors and uncovered mutants in identity, filesystem, share, and transfer modules. Record any claim of an equivalent mutant with its code, location, version, and review evidence. CI distributes complete modules over up to twelve workers and checks the combined Stryker score against 85%. The command runner reports the native suite as a single test. Its incremental cache is keyed by the source, tests, configuration, runtime and selected modules, so changed assertions invalidate old results. Each report records its exact inputs and source. The final gate rejects missing shards, duplicate inputs, mismatched sources and critical survivors. Download the per-shard artifacts for diagnosis.
 

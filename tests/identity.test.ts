@@ -34,7 +34,11 @@ function signedCookie(header: string | undefined) {
   return value
 }
 
-async function signIn(name = 'owner', password = bootstrapPassword) {
+async function signIn(
+  name = 'owner',
+  password = bootstrapPassword,
+  userAgent?: string,
+) {
   const get = new Request(publicOrigin + '/login')
   const form = await identity.context(get, true)
   const before = signedCookie(form.setCookie)
@@ -44,6 +48,7 @@ async function signIn(name = 'owner', password = bootstrapPassword) {
       cookie: before,
       origin: publicOrigin,
       'X-CSRF-Token': form.csrf,
+      ...(userAgent ? { 'User-Agent': userAgent } : {}),
     },
   })
   const access = await identity.context(req)
@@ -441,4 +446,203 @@ test('an unknown account and an incorrect password produce the same failure', as
     await failure('owner', 'not-this-password'),
   )
   expect(identity.adminData(admin).audit).toHaveLength(3)
+})
+
+test('a member can identify their current device without storing the raw user-agent', async () => {
+  for (const [agent, device] of [
+    ['Chrome/115 Edg/115 Windows', 'Edge on Windows'],
+    ['Firefox/126 Linux', 'Firefox on Linux'],
+    ['Safari/605 iPhone', 'Safari on iOS'],
+    ['Chrome/125 Android', 'Chrome on Android'],
+    ['Safari/605 Macintosh', 'Safari on macOS'],
+    ['Chrome/123 CrOS', 'Chrome on ChromeOS'],
+    ['CustomReader/1', 'Unknown device'],
+  ] as const) {
+    const marker = 'private-device-detail'
+    const { after } = await signIn(
+      'owner',
+      bootstrapPassword,
+      marker + ' ' + agent,
+    )
+    const current = await identity.current(
+      new Request(publicOrigin, { headers: { cookie: signedCookie(after) } }),
+    )
+    if (!current) throw new Error('Expected signed-in user')
+    const sessions = identity.userData(current).sessions
+    expect(sessions).toContainEqual(
+      expect.objectContaining({ device, current: 1 }),
+    )
+    const saved = db
+      .query<{ count: number }, []>(
+        "SELECT count(*) AS count FROM auth_sessions WHERE data LIKE '%private-device-detail%'",
+      )
+      .get()
+    expect(saved?.count).toBe(0)
+  }
+})
+
+test('account, group and permission edits reject ordinary invalid values and missing records', async () => {
+  const member = {
+    action: 'createUser',
+    username: 'reader',
+    password: bootstrapPassword,
+  }
+  await identity.manage(admin, member)
+  const account = userNamed('reader')
+  await identity.manage(admin, { action: 'createGroup', name: 'Reading' })
+  const grant = {
+    action: 'setGrant',
+    subjectType: 'user',
+    subjectId: account.id,
+    mountId: 'files',
+    path: 'inbox',
+    permission: 'list',
+    effect: 'allow',
+  }
+  for (const [status, fields] of [
+    [409, { ...member, username: 'READER' }],
+    [400, { ...member, username: 'bad name' }],
+    [400, { ...member, password: 'short' }],
+    [409, { action: 'createGroup', name: 'reading' }],
+    [400, { action: 'createGroup', name: '   ' }],
+    [400, { action: 'setAdmin', userId: account.id, admin: 'unknown' }],
+    [404, { action: 'setEnabled', userId: 'missing', enabled: false }],
+    [
+      400,
+      {
+        action: 'setMembership',
+        userId: account.id,
+        groupId: 'missing',
+        member: true,
+      },
+    ],
+    [400, { action: 'setQuota', userId: account.id, bytes: [] }],
+    [
+      400,
+      { action: 'setHome', userId: account.id, mountId: 'files', path: '' },
+    ],
+    [400, { ...grant, permission: 'print' }],
+    [400, { ...grant, mountId: 'missing' }],
+    [400, { ...grant, subjectId: 'missing' }],
+    [400, { ...grant, path: 'inbox//unused' }],
+    [400, { action: 'unknownAction' }],
+    [400, {}],
+  ] as const) {
+    await expect(identity.manage(admin, fields)).rejects.toMatchObject({
+      status,
+    })
+  }
+  await identity.manage(admin, grant)
+  const directory = { mountId: 'files', segments: ['inbox'] }
+  expect(identity.allowed(account, 'list', directory)).toBe(true)
+  await identity.manage(admin, { ...grant, effect: 'remove' })
+  expect(identity.allowed(account, 'list', directory)).toBe(false)
+  await identity.manage(admin, {
+    action: 'setAdmin',
+    userId: account.id,
+    admin: true,
+  })
+  expect(identity.getUser(account.id)?.admin).toBe(true)
+  await identity.manage(admin, {
+    action: 'setAdmin',
+    userId: account.id,
+    admin: false,
+  })
+  expect(identity.getUser(account.id)?.admin).toBe(false)
+  await identity.manage(admin, {
+    action: 'setEnabled',
+    userId: account.id,
+    enabled: false,
+  })
+  expect(identity.getUser(account.id)).toBeNull()
+  await identity.manage(admin, {
+    action: 'setEnabled',
+    userId: account.id,
+    enabled: true,
+  })
+  expect(identity.getUser(account.id)?.username).toBe('reader')
+})
+
+test('leaving a group removes its inherited permission and invalidates the member session', async () => {
+  await identity.manage(admin, {
+    action: 'createUser',
+    username: 'group-reader',
+    password: bootstrapPassword,
+  })
+  const member = userNamed('group-reader')
+  await identity.manage(admin, { action: 'createGroup', name: 'Editors' })
+  const group = db.query<{ id: string }, []>('SELECT id FROM auth_groups').get()
+  if (!group) throw new Error('Missing group')
+  const membership = {
+    action: 'setMembership',
+    userId: member.id,
+    groupId: group.id,
+  }
+  await identity.manage(admin, { ...membership, member: true })
+  await identity.manage(admin, {
+    action: 'setGrant',
+    subjectType: 'group',
+    subjectId: group.id,
+    mountId: 'files',
+    path: '/inbox',
+    permission: 'read',
+    effect: 'allow',
+  })
+  const { after } = await signIn(member.username)
+  const req = new Request(publicOrigin, {
+    headers: { cookie: signedCookie(after) },
+  })
+  const directory = { mountId: 'files', segments: ['inbox'] }
+  expect(identity.allowed(member, 'read', directory)).toBe(true)
+  await identity.manage(admin, { ...membership, member: false })
+  expect(identity.allowed(member, 'read', directory)).toBe(false)
+  expect(await identity.current(req)).toBeNull()
+})
+
+test('the token cap can be cleared individually, while invalid scope or expiry never issues a credential', async () => {
+  const issue = { action: 'issueToken', label: 'Reader', scope: 'list,read' }
+  for (const fields of [
+    { ...issue, label: ' ' },
+    { ...issue, days: 0 },
+    { ...issue, days: 366 },
+    { ...issue, days: 1.5 },
+    { ...issue, scope: 'create' },
+    { action: 'unknown' },
+    { action: 'changePassword', password: 'short' },
+  ]) {
+    await expect(identity.self(admin, fields)).rejects.toMatchObject({
+      status: 400,
+    })
+  }
+  await expect(
+    identity.self(admin, {
+      action: 'changePassword',
+      currentPassword: 'wrong prior password',
+      password: 'new test-only password',
+    }),
+  ).rejects.toMatchObject({ status: 401 })
+  for (let i = 0; i < 32; i++)
+    await identity.self(admin, { ...issue, label: 'reader-' + i })
+  await expect(identity.self(admin, issue)).rejects.toMatchObject({
+    status: 409,
+  })
+  const token = db
+    .query<{ id: string }, []>('SELECT id FROM auth_tokens ORDER BY id LIMIT 1')
+    .get()
+  if (!token) throw new Error('Expected a recorded token')
+  await identity.manage(admin, { action: 'revokeToken', id: token.id })
+  expect((await identity.self(admin, issue)).token).toMatch(/^fs_/)
+  const { after } = await signIn()
+  const session = db
+    .query<{ id: string }, []>(
+      'SELECT publicId AS id FROM auth_sessions WHERE userId IS NOT NULL LIMIT 1',
+    )
+    .get()
+  if (!session) throw new Error('Expected a signed-in session')
+  await identity.manage(admin, { action: 'revokeSession', id: session.id })
+  expect(
+    await identity.current(
+      new Request(publicOrigin, { headers: { cookie: signedCookie(after) } }),
+    ),
+  ).toBeNull()
 })

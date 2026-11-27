@@ -3,6 +3,7 @@
 const DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024
 const PARALLEL = 3
 const jobs = new Map()
+const finishedStates = new Set(['Completed', 'Skipped', 'Cancelled'])
 let loadedScope = ''
 let stateStore
 let uploadNotice = () => {}
@@ -53,6 +54,7 @@ function meta(job) {
     filename,
     relative,
     size,
+    lastModified,
     mount,
     parent,
     offset,
@@ -67,6 +69,7 @@ function meta(job) {
     filename,
     relative,
     size,
+    lastModified,
     mount,
     parent,
     offset,
@@ -102,14 +105,19 @@ function fileSize(bytes) {
   return (bytes / 1073741824).toFixed(2) + ' GB'
 }
 async function error(response) {
-  let message = 'Transfer failed (HTTP ' + response.status + ').'
-  try {
-    const body = await response.json()
-    message = body.error?.message || body.message || message
-  } catch {
-    return new Error(message)
+  const fallback = 'Transfer failed (HTTP ' + response.status + ').'
+  const type = response.headers.get('Content-Type')?.split(';')[0]
+  if (type === 'text/plain')
+    return new Error((await response.text()).trim() || fallback)
+  if (type === 'application/json') {
+    try {
+      const body = await response.json()
+      return new Error(body.error?.message || body.message || fallback)
+    } catch {
+      return new Error(fallback)
+    }
   }
-  return new Error(message)
+  return new Error(fallback)
 }
 function chunkLimit(response, previous) {
   const header = response.headers.get('Fileserver-Max-Chunk-Bytes')
@@ -141,7 +149,7 @@ async function offsetAtServer(job, signal) {
   )
     throw new Error('The server returned an invalid upload offset.')
   job.chunkBytes = chunkLimit(r, job.chunkBytes)
-  return offset
+  return { offset, skipped: r.headers.get('Upload-State') === 'skipped' }
 }
 async function digest(bytes) {
   const data = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
@@ -177,6 +185,7 @@ async function upload(job) {
   job.rate = 0
   const signal = controller.signal
   let completed = false
+  let skipped = false
   try {
     if (!job.location) {
       const parts = job.relative.split('/')
@@ -191,7 +200,9 @@ async function upload(job) {
       }
       const r = await fetch(job.createUrl, {
         method: 'POST',
-        signal,
+        // Recover the server's Location even if a user pauses during creation.
+        // Cancellation can then terminate the reservation before dismissing it.
+        signal: AbortSignal.timeout(30000),
         headers: headers({
           'Upload-Length': String(job.size),
           'Upload-Metadata': Object.entries(fields)
@@ -203,12 +214,15 @@ async function upload(job) {
       if (!r.ok) throw await error(r)
       const loc = r.headers.get('Location')
       if (!loc) throw new Error('The server did not return an upload location.')
+      skipped = r.headers.get('Upload-State') === 'skipped'
       job.location = checkedSameOrigin(loc)
       job.chunkBytes = chunkLimit(r)
       await save(job)
       job.offset = 0
     } else {
-      job.offset = await offsetAtServer(job, signal)
+      const status = await offsetAtServer(job, signal)
+      job.offset = status.offset
+      skipped = status.skipped
       if (job.verify) {
         job.state = 'Verifying'
         renderTransfers()
@@ -242,6 +256,7 @@ async function upload(job) {
         throw new Error(
           'The server did not confirm this chunk. Retry to check its offset.',
         )
+      skipped = r.headers.get('Upload-State') === 'skipped'
       job.offset = end
       job.rate =
         (end - startOffset) /
@@ -250,13 +265,14 @@ async function upload(job) {
       renderTransfers()
     }
     completed = true
-    job.state = 'Completed'
+    job.state = skipped ? 'Skipped' : 'Completed'
     job.file = null
     job.error = ''
     await forget(job.id)
-    window.dispatchEvent(
-      new CustomEvent('transfer-complete', { detail: meta(job) }),
-    )
+    if (!skipped)
+      window.dispatchEvent(
+        new CustomEvent('transfer-complete', { detail: meta(job) }),
+      )
   } catch (e) {
     if (!completed && !signal.aborted) {
       job.state = 'Failed'
@@ -281,7 +297,8 @@ function pump() {
     )
       continue
     available--
-    safely(upload(job))
+    job.running = upload(job)
+    safely(job.running)
   }
   renderTransfers()
 }
@@ -337,9 +354,7 @@ function el(tag, content, cls) {
 }
 export function renderTransfers() {
   const visible = [...jobs.values()].filter((j) => j.scope === loadedScope)
-  const active = visible.filter(
-    (j) => !['Completed', 'Cancelled'].includes(j.state),
-  )
+  const active = visible.filter((j) => !finishedStates.has(j.state))
   document.querySelectorAll('[data-queue-count]').forEach((count) => {
     count.hidden = active.length === 0
     count.textContent = String(active.length)
@@ -367,6 +382,8 @@ export function renderTransfers() {
     for (const job of visible.slice().reverse()) {
       const row = el('div', '', 'transfer-item'),
         progress = el('progress')
+      row.setAttribute('role', 'group')
+      row.setAttribute('aria-label', job.relative)
       progress.max = job.size || 1
       progress.value = job.state === 'Completed' ? progress.max : job.offset
       progress.setAttribute('aria-label', job.filename + ' progress')
@@ -400,10 +417,12 @@ export function renderTransfers() {
       )
         button('pause', 'Pause')
       if (['Paused', 'Failed', 'Choose file to resume'].includes(job.state))
-        button('resume', job.file ? 'Retry / resume' : 'Choose file to resume')
-      if (!['Completed', 'Cancelled'].includes(job.state))
-        button('cancel', 'Cancel')
-      else button('remove', 'Dismiss')
+        button(
+          'resume',
+          job.file && !job.verify ? 'Retry / resume' : 'Choose file to resume',
+        )
+      if (finishedStates.has(job.state)) button('remove', 'Dismiss')
+      else if (job.state !== 'Cancelling') button('cancel', 'Cancel')
       row.append(controls)
       list.append(row)
     }
@@ -427,6 +446,7 @@ async function start(files) {
       filename: file.name,
       file,
       size: file.size,
+      lastModified: file.lastModified,
       offset: 0,
       location: '',
       createUrl: target.dataset.uploadUrl,
@@ -531,7 +551,12 @@ document.addEventListener('click', (e) => {
     picker.addEventListener('change', () => {
       const file = picker.files?.[0]
       if (!file) return
-      if (file.name !== job.filename || file.size !== job.size) {
+      if (
+        file.name !== job.filename ||
+        file.size !== job.size ||
+        (job.lastModified !== undefined &&
+          file.lastModified !== job.lastModified)
+      ) {
         uploadNotice('Choose the original file to resume.', true)
         return
       }
@@ -545,20 +570,38 @@ document.addEventListener('click', (e) => {
   if (action === 'cancel')
     safely(
       (async () => {
-        job.state = 'Paused'
+        job.state = 'Cancelling'
         job.controller?.abort()
-        if (job.location) {
-          const r = await fetch(job.location, {
-            method: 'DELETE',
-            headers: headers(),
-          })
-          if (!r.ok && r.status !== 404 && r.status !== 410)
-            throw await error(r)
-        }
-        await forget(job.id)
-        job.state = 'Cancelled'
-        job.file = null
         renderTransfers()
+        try {
+          await job.running
+          if (finishedStates.has(job.state)) return
+          if (job.location) {
+            const r = await fetch(job.location, {
+              method: 'DELETE',
+              headers: headers(),
+            })
+            if (r.status === 409) {
+              const status = await offsetAtServer(job)
+              if (status.offset !== job.size) throw await error(r)
+              job.offset = status.offset
+              job.state = status.skipped ? 'Skipped' : 'Completed'
+              if (!status.skipped)
+                window.dispatchEvent(
+                  new CustomEvent('transfer-complete', { detail: meta(job) }),
+                )
+            } else if (!r.ok && r.status !== 404 && r.status !== 410)
+              throw await error(r)
+          }
+          await forget(job.id)
+          if (!finishedStates.has(job.state)) job.state = 'Cancelled'
+          job.file = null
+        } catch (e) {
+          job.state = 'Failed'
+          job.error = e.message || 'Could not cancel this upload.'
+        } finally {
+          renderTransfers()
+        }
       })(),
     )
 })

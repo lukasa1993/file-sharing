@@ -1,4 +1,4 @@
-# Product
+# lshare
 
 <!-- impeccable:product-schema 1 -->
 
@@ -55,4 +55,4 @@ Support desktop and mobile browsers, keyboard and touch, visible focus, accessib
 
 The pre-reset app demonstrated selection across folders, individual and bundled downloads, folder-targeted upload requests, and revocable links. The new build spec governs architecture, release scope, and acceptance tests. Production readiness depends on passing its storage, permission, transfer, and recovery gates. [Pre-reset product](https://github.com/lukasa1993/file-sharing/tree/f676043) · [Build specification](docs/FILE_SERVER_BUILD_SPEC.md)
 
-`fileserver` is a working name. Final branding, default limits and retention, and support for untrusted external filesystem writers remain open.
+The project name is **lshare**, written in lowercase. Its default blue identity appears on the workspace, shared links, and upload requests. Hosts can customize the displayed workspace name and icon. Default limits, retention, and support for untrusted external filesystem writers remain open decisions.

@@ -1,4 +1,4 @@
-# File server implementation
+# lshare implementation
 
 Read the [product brief](PRODUCT.md) and [build specification](docs/FILE_SERVER_BUILD_SPEC.md) for the user workflows, HTTP contracts, and release checks. The [Effect architecture addendum](docs/EFFECT_SPEC.md) takes precedence wherever the two specifications differ. All three product iterations are part of this build.
 
