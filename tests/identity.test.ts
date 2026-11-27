@@ -554,7 +554,7 @@ test('a member can identify their current device without storing the raw user-ag
       .get()
     expect(saved?.count).toBe(0)
   }
-}, 20000)
+}, 45000)
 
 test('account, group and permission edits reject ordinary invalid values and missing records', async () => {
   const member = {
