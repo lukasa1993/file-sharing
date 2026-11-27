@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
   mkdir,
@@ -123,28 +123,68 @@ async function prepareSandbox() {
 class BunMutationRunner {
   children = new Set()
   lastKiller = new Map()
+  disconnected = () => this.stop()
+  terminated = () => {
+    this.stop()
+    process.exit(143)
+  }
+  async init() {
+    process.once('disconnect', this.disconnected)
+    process.once('SIGTERM', this.terminated)
+    process.once('SIGINT', this.terminated)
+  }
   capabilities() {
     return { reloadEnvironment: true }
   }
   async execute(suite, env) {
     if (suite.kind === 'native') {
-      const result = await run(
-        ['bun', 'test', '--bail=1', '--timeout=30000', ...suite.args],
-        env,
-        this.children,
-      )
-      if (
-        result.code !== 0 &&
-        !/\(fail\)|\b[1-9]\d* fail\b/.test(result.output)
-      )
-        return { ...result, infrastructure: true }
-      return result
+      const report = join(work, 'bun-' + randomUUID() + '.xml')
+      try {
+        const result = await run(
+          [
+            'bun',
+            'test',
+            '--no-orphans',
+            '--bail=1',
+            '--timeout=30000',
+            '--reporter=junit',
+            '--reporter-outfile',
+            report,
+            ...suite.args,
+          ],
+          env,
+          this.children,
+        )
+        if (result.code === 0) return result
+        // Bun's reporter distinguishes AssertionError, TimeoutError and arbitrary
+        // setup/teardown exceptions. An inconclusive suite can never establish a kill.
+        const xml = await readFile(report, 'utf8').catch(() => '')
+        const failures = [...xml.matchAll(/^\s*<failure type="([^"]+)"/gm)]
+        const declared = Number(
+          xml.match(/<testsuites [^>]*\bfailures="(\d+)"/)?.[1],
+        )
+        if (
+          failures.length &&
+          failures.length === declared &&
+          failures.every((entry) => entry[1] === 'AssertionError')
+        )
+          return result
+        return {
+          ...result,
+          infrastructure: true,
+          output: 'Bun did not report an assertion failure.\n' + result.output,
+        }
+      } finally {
+        await rm(report, { force: true })
+      }
     }
     const output = join(work, 'e2e-' + randomUUID())
     try {
       const result = await run(
         [
           'bun',
+          'run',
+          '--no-orphans',
           'scripts/e2e.ts',
           ...suite.args,
           '--exclude-tag',
@@ -174,7 +214,11 @@ class BunMutationRunner {
           if (
             !failed.length ||
             !failed.every(
-              (test) => test.attempts.at(-1)?.error?.category === 'test',
+              (test) =>
+                test.kind === 'test' &&
+                test.attempts.at(-1)?.error?.category === 'test' &&
+                test.attempts.at(-1)?.error?.phase === 'body' &&
+                !/TIMEOUT|DEADLINE/.test(test.attempts.at(-1).error.code),
             )
           )
             return { ...result, infrastructure: true }
@@ -301,6 +345,7 @@ class BunMutationRunner {
         status: MutantRunStatus.Error,
         errorMessage: 'Unknown test ID in mutation filter.',
       }
+    let inconclusive = ''
     let tested = 0,
       expired = false
     const timer = setTimeout(() => {
@@ -314,12 +359,15 @@ class BunMutationRunner {
           __STRYKER_ACTIVE_MUTANT__: activeMutant.id,
         })
         tested++
-        if (expired) return { status: MutantRunStatus.Timeout }
-        if (result.infrastructure || result.signal || result.code === null)
-          return {
-            status: MutantRunStatus.Error,
-            errorMessage: result.output || String(result.signal),
-          }
+        if (expired)
+          return inconclusive
+            ? { status: MutantRunStatus.Error, errorMessage: inconclusive }
+            : { status: MutantRunStatus.Timeout }
+        if (result.infrastructure || result.signal || result.code === null) {
+          inconclusive =
+            suite.id + ': ' + (result.output || String(result.signal))
+          continue
+        }
         if (result.code !== 0) {
           this.lastKiller.set(lineKey, suite.id)
           this.lastKiller.set(activeMutant.fileName, suite.id)
@@ -331,21 +379,43 @@ class BunMutationRunner {
           }
         }
       }
+      if (inconclusive)
+        return { status: MutantRunStatus.Error, errorMessage: inconclusive }
       return { status: MutantRunStatus.Survived, nrOfTests: tested }
     } finally {
       clearTimeout(timer)
     }
   }
   stop() {
-    for (const child of this.children) {
+    const roots = [...this.children].map((child) => child.pid).filter(Boolean)
+    if (!roots.length) return
+    // Playwright can launch browsers in separate process groups. Resolve the
+    // descendant tree while its parents still exist, before terminating them.
+    const result = spawnSync('ps', ['-eo', 'pid=,ppid='], {
+      encoding: 'utf8',
+      timeout: 2000,
+    })
+    const children = new Map()
+    for (const row of (result.stdout ?? '').trim().split('\n')) {
+      const [pid, parent] = row.trim().split(/\s+/).map(Number)
+      if (!children.has(parent)) children.set(parent, [])
+      children.get(parent).push(pid)
+    }
+    const tree = [...roots]
+    for (const parent of tree) tree.push(...(children.get(parent) ?? []))
+    for (const pid of [...tree.reverse(), ...roots.map((root) => -root)]) {
       try {
-        process.kill(-child.pid, 'SIGKILL')
+        process.kill(pid, 'SIGKILL')
       } catch (error) {
         if (error.code !== 'ESRCH') throw error
       }
     }
+    this.children.clear()
   }
   async dispose() {
+    process.off('disconnect', this.disconnected)
+    process.off('SIGTERM', this.terminated)
+    process.off('SIGINT', this.terminated)
     this.stop()
   }
 }

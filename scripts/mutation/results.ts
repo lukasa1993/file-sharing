@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { calculateMetrics } from 'mutation-testing-metrics'
+import { calculateMetrics } from 'mutation-testing-metrics'
+import { critical } from '../quality-sources.ts'
 
 export interface MutationReport {
   config: { mutate: string[] }
@@ -44,4 +45,45 @@ export async function readVerifiedMutation(
       throw new Error('Incomplete or repeated mutation result: ' + file)
   }
   return report.files
+}
+
+export function reviewMutation(files: MutationReport['files']) {
+  let survivors = 0
+  for (const [file, { mutants }] of Object.entries(files)) {
+    for (const mutant of mutants) {
+      if (
+        mutant.status === 'RuntimeError' ||
+        mutant.status === 'CompileError'
+      ) {
+        console.error(
+          file +
+            ':' +
+            mutant.location.start.line +
+            ' #' +
+            mutant.id +
+            ' ' +
+            mutant.status,
+        )
+        continue
+      }
+      if (!critical.test(file)) continue
+      if (mutant.status !== 'Survived' && mutant.status !== 'NoCoverage')
+        continue
+      console.error(
+        `${file}:${mutant.location.start.line} #${mutant.id} ${mutant.mutatorName} ${mutant.status}; review required.`,
+      )
+      survivors++
+    }
+  }
+  const metrics = calculateMetrics(files).metrics
+  console.log(
+    `Mutation score: ${metrics.totalDetected}/${metrics.totalValid} detected, ${metrics.mutationScore.toFixed(2)}%. Killed: ${metrics.killed}. Timed out: ${metrics.timeout}. Pending: ${metrics.pending}. Runtime errors: ${metrics.runtimeErrors}. Compile errors: ${metrics.compileErrors}. Critical mutants requiring review: ${survivors}.`,
+  )
+  return metrics.pending ||
+    metrics.runtimeErrors ||
+    metrics.compileErrors ||
+    survivors ||
+    metrics.mutationScore < 85
+    ? 1
+    : 0
 }

@@ -45,7 +45,7 @@ To check a signed-out recipient’s interrupted transfer and native file save, r
 
 The November 2026 cloud run used separate 5,242,977-byte files named `field-recording.bin`. Both browser managers saved the original bytes.
 
-| Browser | Resume offset | Validated SHA-256 |
-| --- | ---: | --- |
-| Chrome for Testing 159.0.8154.6 | 884,736 | `a050ee6ebad82fa15777cb47123900106d58921c7d37b4a954a3968b4440a2c1` |
-| Firefox 159.0 | 557,056 | `85dd231f6a6b0b6452b526371080f66fe0d8b113018cc7573c0fbdcd5968dfce` |
+| Browser                         | Resume offset | Validated SHA-256                                                  |
+| ------------------------------- | ------------: | ------------------------------------------------------------------ |
+| Chrome for Testing 159.0.8154.6 |       884,736 | `a050ee6ebad82fa15777cb47123900106d58921c7d37b4a954a3968b4440a2c1` |
+| Firefox 159.0                   |       557,056 | `85dd231f6a6b0b6452b526371080f66fe0d8b113018cc7573c0fbdcd5968dfce` |

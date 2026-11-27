@@ -1,13 +1,13 @@
 import { readFile, rm, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { calculateMetrics } from 'mutation-testing-metrics'
 import { readFileSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import ts from 'typescript'
 
-import { critical, sourceFiles } from './quality-sources.ts'
+import { sourceFiles } from './quality-sources.ts'
 import {
   readVerifiedMutation,
+  reviewMutation,
   type MutationReport,
 } from './mutation/results.ts'
 
@@ -229,46 +229,6 @@ async function mutationMatrix(all: boolean) {
     lightest.size += source.size
   }
   return { include: shards.map(({ index, files }) => ({ index, files })) }
-}
-
-function reviewMutation(files: MutationReport['files']) {
-  let survivors = 0
-  for (const [file, { mutants }] of Object.entries(files)) {
-    for (const mutant of mutants) {
-      if (
-        mutant.status === 'RuntimeError' ||
-        mutant.status === 'CompileError'
-      ) {
-        console.error(
-          file +
-            ':' +
-            mutant.location.start.line +
-            ' #' +
-            mutant.id +
-            ' ' +
-            mutant.status,
-        )
-        continue
-      }
-      if (!critical.test(file)) continue
-      if (mutant.status !== 'Survived' && mutant.status !== 'NoCoverage')
-        continue
-      console.error(
-        `${file}:${mutant.location.start.line} #${mutant.id} ${mutant.mutatorName} ${mutant.status}; review required.`,
-      )
-      survivors++
-    }
-  }
-  const metrics = calculateMetrics(files).metrics
-  console.log(
-    `Mutation score: ${metrics.totalDetected}/${metrics.totalValid} detected, ${metrics.mutationScore.toFixed(2)}%. Pending: ${metrics.pending}. Runtime errors: ${metrics.runtimeErrors}. Compile errors: ${metrics.compileErrors}. Critical mutants requiring review: ${survivors}.`,
-  )
-  return metrics.pending ||
-    metrics.runtimeErrors ||
-    survivors ||
-    metrics.mutationScore < 85
-    ? 1
-    : 0
 }
 
 async function mutation(all: boolean) {
