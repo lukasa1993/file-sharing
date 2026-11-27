@@ -10,7 +10,12 @@ type Handler = (
 // Bun's node:http implementation preserves Content-Length on streamed file ranges.
 // Remix owns Web Request construction, disconnect propagation, backpressure and cookie headers.
 export async function listenHttp(
-  options: { hostname: string; port: number; publicProtocol?: string },
+  options: {
+    hostname: string
+    port: number
+    publicProtocol?: string
+    idleTimeoutMs?: number
+  },
   handler: Handler,
 ) {
   let closing = false
@@ -25,11 +30,49 @@ export async function listenHttp(
         outgoing.end()
         return
       }
-      const idle = (preparing: boolean) =>
-        incoming.setTimeout(preparing ? 0 : 120000)
-      idle(false)
+      // Bun 1.4 applies IncomingMessage.setTimeout as a fixed deadline even
+      // during successful response writes. Use socket progress for both
+      // directions while Remix retains its normal backpressure and cleanup.
+      const socket = incoming.socket
+      incoming.setTimeout(0)
+      const limit = options.idleTimeoutMs ?? 120000
+      let bytes = socket.bytesWritten
+      let lastActivity = performance.now()
+      let preparing = false
+      const idle = (active: boolean) => {
+        preparing = active
+        lastActivity = performance.now()
+      }
+      const watch = setInterval(
+        () => {
+          const current = socket.bytesWritten
+          const now = performance.now()
+          if (preparing || current !== bytes) {
+            bytes = current
+            lastActivity = now
+          } else if (now - lastActivity >= limit) {
+            socket.destroy()
+          }
+        },
+        Math.max(10, Math.floor(limit / 4)),
+      )
+      watch.unref()
+      const bodyRead = () => {
+        lastActivity = performance.now()
+      }
+      const stopWatch = () => {
+        clearInterval(watch)
+        incoming.off('data', bodyRead)
+      }
+      outgoing.once('close', stopWatch)
+      outgoing.once('finish', stopWatch)
       const listener = createRequestListener(
-        (request) => handler(request, incoming.socket.remoteAddress, idle),
+        (request) => {
+          // Bun's socket.bytesRead does not advance for a streamed POST.
+          // Remix has already attached its reader and owns pause/resume.
+          if (request.body) incoming.on('data', bodyRead)
+          return handler(request, socket.remoteAddress, idle)
+        },
         {
           trustProxy: false,
           ...(options.publicProtocol

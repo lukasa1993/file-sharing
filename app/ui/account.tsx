@@ -1,5 +1,9 @@
 /** @jsxImportSource remix/component */
 import type { RemixNode } from 'remix/component'
+import {
+  contentLimitFields,
+  type ContentLimits,
+} from '../transfers/content-limits.ts'
 import type { AppConfig } from '../contracts.ts'
 import {
   appShell,
@@ -97,6 +101,12 @@ function options(
     </label>
   )
 }
+function quotaLabel(used: number, reserved: number, quota: number | null) {
+  const allowance = quota === null ? 'unlimited' : sizeLabel(quota)
+  const remaining = reserved ? ' · ' + sizeLabel(reserved) + ' reserved' : ''
+  return sizeLabel(used) + ' used of ' + allowance + remaining
+}
+
 function table(title: string, headers: string[], data: RemixNode[][]) {
   return (
     <section class="admin-section">
@@ -187,6 +197,7 @@ export async function renderAdmin(
   page: Shell & {
     data: unknown
     retentionDays: number
+    contentLimits: ContentLimits
     runtime: {
       version: string
       platform: string
@@ -215,6 +226,9 @@ export async function renderAdmin(
   const mountOptions = page.mounts.map((m) => ({ value: m.id, label: m.label }))
   const enabledAdmins = users.filter((u) => u.admin && u.enabled).length
   const storage = rows(page.data, 'mounts')
+  const usage = new Map(
+    rows(page.data, 'quotaUsage').map((row) => [row.actor, row]),
+  )
   const caps = page.runtime.limits
   const transferRate = transfers.reduce(
     (total, t) => total + Number(t.bytesPerSecond || 0),
@@ -232,12 +246,26 @@ export async function renderAdmin(
       <section id="accounts">
         {table(
           'Users',
-          ['Username', 'Role', 'State', 'Upload quota', 'Actions'],
+          [
+            'Username',
+            'Role',
+            'State',
+            'Upload quota',
+            'Transfer bandwidth',
+            'Actions',
+          ],
           users.map((u) => [
             str(u.username),
             u.admin ? 'Administrator' : 'Member',
             u.enabled ? 'Enabled' : 'Disabled',
-            u.quota == null ? 'Unlimited' : sizeLabel(Number(u.quota)),
+            quotaLabel(
+              Number(usage.get(u.id)?.used ?? 0),
+              Number(usage.get(u.id)?.reserved ?? 0),
+              u.quota == null ? null : Number(u.quota),
+            ),
+            u.bandwidth == null
+              ? 'Unlimited'
+              : sizeLabel(Number(u.bandwidth)) + '/s',
             u.admin && u.enabled && enabledAdmins === 1 ? (
               <span class="quiet">Last administrator</span>
             ) : (
@@ -317,6 +345,24 @@ export async function renderAdmin(
                 )}
               </>,
               'Save quota',
+            )}
+            {form(
+              admin,
+              'setBandwidth',
+              'Set transfer bandwidth',
+              <>
+                {options('User', 'userId', userOptions)}
+                {input(
+                  'Bytes per second (blank for unlimited)',
+                  'bytesPerSecond',
+                  'number',
+                  false,
+                )}
+                <p class="quiet">
+                  The account shares this rate across uploads and downloads.
+                </p>
+              </>,
+              'Save bandwidth',
             )}
           </>
         ) : null}
@@ -629,6 +675,33 @@ export async function renderAdmin(
         </section>
         {form(
           admin,
+          'setContentLimits',
+          'Preview and staging limits',
+          <>
+            <p>
+              Formatted previews also follow the text preview limit. Set either
+              staging limit to zero for unlimited capacity. Changes to staging
+              limits apply to new uploads.
+            </p>
+            {contentLimitFields.map(({ key, label, min, max }) => (
+              <label>
+                {label}
+                <input
+                  name={key}
+                  type="number"
+                  min={min}
+                  max={max}
+                  step={1}
+                  required
+                  value={page.contentLimits[key]}
+                />
+              </label>
+            ))}
+          </>,
+          'Save limits',
+        )}
+        {form(
+          admin,
           'setSettings',
           'Brand and retention',
           <>
@@ -668,7 +741,14 @@ export async function renderAdmin(
   )
 }
 export async function renderAccount(
-  page: Shell & { data: unknown; issuedToken?: string },
+  page: Shell & {
+    data: unknown
+    issuedToken?: string
+    used: number
+    reserved: number
+    quota: number | null
+    bandwidth: number
+  },
 ) {
   const form = settingsForm.bind(null, page.csrf),
     quick = quickAction.bind(null, page.csrf)
@@ -683,7 +763,33 @@ export async function renderAccount(
           <dd>{page.user.username}</dd>
           <dt>Role</dt>
           <dd>{page.user.admin ? 'Administrator' : 'Member'}</dd>
+          <dt>Upload quota</dt>
+          <dd>{quotaLabel(page.used, page.reserved, page.quota)}</dd>
+          <dt>Transfer bandwidth</dt>
+          <dd>
+            {page.bandwidth ? sizeLabel(page.bandwidth) + '/s' : 'Unlimited'}
+          </dd>
         </dl>
+        <details class="setting-form">
+          <summary>Folder permission IDs {icon('down', 15)}</summary>
+          <p>
+            Give your account or group ID to a folder manager to receive access.
+          </p>
+          <dl class="profile">
+            <dt>Account ID</dt>
+            <dd>
+              <code>{page.user.id}</code>
+            </dd>
+            {rows(page.data, 'groups').map((group) => (
+              <>
+                <dt>{str(group.name)} group ID</dt>
+                <dd>
+                  <code>{str(group.id)}</code>
+                </dd>
+              </>
+            ))}
+          </dl>
+        </details>
         {form(
           self,
           'changePassword',

@@ -21,6 +21,6 @@ Open the loopback address and sign in with the credentials in the private bootst
 
 ## Validation
 
-`bun run quality` runs development validation. `bun run release:check` adds the expensive checks. `bun run test:e2e:fixture` starts a disposable real server and runs the headless browser suite. Agent steps need the configured ChatGPT sign-in. See the [browser test guide](tests/README.md).
+`bun run quality` runs development validation. `bun run release:check` adds the expensive checks. `bun run test:e2e:fixture` starts a disposable real server and runs the headless browser suite. Use `bun run test:e2e:packaged` to exercise the compiled server and browser assets. Agent steps use the configured ChatGPT sign-in. See the [browser test guide](tests/README.md).
 
 The [specification](SPEC.md) ties the user workflows to the implementation requirements. See [architecture and release evidence](docs/implementation-status.md) for supported behaviors, verification results, and open gates.

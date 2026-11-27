@@ -9,6 +9,7 @@ import {
   type User,
 } from '../app/contracts.ts'
 import { Shares } from '../app/shares/index.ts'
+import { Identity } from '../app/identity/index.ts'
 import { contains } from '../app/shares/store.ts'
 import type { Clock } from 'effect'
 
@@ -55,6 +56,17 @@ function fixture(clock?: Clock.Clock) {
   ]
   const suspended = new Set<string>()
   const sessions = new Set([recipient.sessionId])
+  const identity = new Identity(
+    db,
+    {
+      dataDir: ':memory:',
+      publicOrigin: 'http://localhost',
+      sessionSecret: crypto.randomUUID(),
+      port: 0,
+      mounts: [],
+    },
+    clock,
+  )
   const service = new Shares(
     db,
     {
@@ -79,7 +91,10 @@ function fixture(clock?: Clock.Clock) {
       allowed: (user, _action, ref) =>
         users.has(user.id) && !suspended.has(ref.segments.join('/')),
       getUser: (id) => users.get(id) ?? null,
+      bandwidthBudget: (id) => identity.bandwidthBudget(id),
       sessionActive: (id) => sessions.has(id),
+      consumePasswordAttempt: (key, peer) =>
+        identity.consumePasswordAttempt(key, peer),
     },
     {
       async download(request, ref, guard, options = {}) {
@@ -107,7 +122,7 @@ function fixture(clock?: Clock.Clock) {
     },
     clock,
   )
-  return { service, db, users, entries, suspended, sessions }
+  return { service, db, users, entries, suspended, sessions, identity }
 }
 const link = (path: string, method = 'GET') =>
   new Request('http://localhost/' + path, { method })
@@ -615,7 +630,49 @@ test('limits password attempts per session and clears the throttle after a minut
       }),
     ),
   )
-})
+}, 30_000)
+
+test('shares the trusted-client password budget across sign-ins and share unlocks', async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make()
+        const { service, identity } = fixture(clock)
+        const password = 'fixture-booklet'
+        const input = { ...createInput, access: 'password', password }
+        const first = yield* Effect.promise(() => service.save(owner, input))
+        const second = yield* Effect.promise(() =>
+          service.save(owner, { ...input, alias: 'agenda' }),
+        )
+        const readingRoom = '192.0.2.14'
+        const office = '192.0.2.15'
+        for (let i = 0; i < 29; i++)
+          identity.consumePasswordAttempt('login:reader-' + i, readingRoom)
+        const unlock = (id: string, peer: string) =>
+          service.public(
+            new Request('http://localhost/_/shares/' + id + '/unlock', {
+              method: 'POST',
+              body: new URLSearchParams({ password }),
+            }),
+            recipient,
+            undefined,
+            peer,
+          )
+        yield* Effect.promise(async () => {
+          expect((await unlock(first.id, readingRoom)).status).toBe(303)
+          await expect(unlock(second.id, readingRoom)).rejects.toMatchObject({
+            status: 429,
+          })
+          expect((await unlock(second.id, office)).status).toBe(303)
+        })
+        yield* clock.adjust('1 minute')
+        yield* Effect.promise(async () => {
+          expect((await unlock(second.id, readingRoom)).status).toBe(303)
+        })
+      }),
+    ),
+  )
+}, 30_000)
 
 test('uses the current administrator role for ownership changes and the management list', async () => {
   const { service, users } = fixture()

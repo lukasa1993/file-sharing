@@ -130,6 +130,7 @@ export class Shares extends ShareStore {
     id: string,
     access: ShareSession,
     brand: string,
+    peer?: string,
   ) {
     if (request.method !== 'POST') return method('POST')
     const s = this.byId(id)
@@ -141,21 +142,7 @@ export class Shares extends ShareStore {
       !this.identity.sessionActive(access.sessionId)
     )
       throw unavailable()
-    const now = this.clock.currentTimeMillisUnsafe()
-    for (const [key, record] of this.attempts)
-      if (record.until <= now) this.attempts.delete(key)
     const recipient = keyForSession(access.sessionId)
-    const buckets = [
-      { key: 'all', limit: 120 },
-      { key: s.id, limit: 40 },
-      { key: s.id + ':' + recipient, limit: 8 },
-    ]
-    if (
-      buckets.some(
-        ({ key, limit }) => (this.attempts.get(key)?.count ?? 0) >= limit,
-      )
-    )
-      throw new AppError(429, 'Too many attempts. Try again later.')
     const form = new URLSearchParams(await readBody(request, 4096))
     const base = '/' + s.alias
     const candidate = form.get('returnTo') ?? base
@@ -171,6 +158,21 @@ export class Shares extends ShareStore {
     const password = form.get('password')
     if (!password || Buffer.byteLength(password) > 512)
       throw new AppError(400, 'Enter the share password.')
+    const now = this.clock.currentTimeMillisUnsafe()
+    for (const [key, record] of this.attempts)
+      if (record.until <= now) this.attempts.delete(key)
+    const recipientKey = s.id + ':' + recipient
+    const buckets = [
+      { key: s.id, limit: 40 },
+      { key: recipientKey, limit: 8 },
+    ]
+    if (
+      buckets.some(
+        ({ key, limit }) => (this.attempts.get(key)?.count ?? 0) >= limit,
+      )
+    )
+      throw new AppError(429, 'Too many attempts. Try again later.')
+    this.identity.consumePasswordAttempt('share:' + recipientKey, peer)
     for (const { key } of buckets) {
       const record = this.attempts.get(key) ?? { count: 0, until: now + 60_000 }
       record.count++
@@ -234,6 +236,7 @@ export class Shares extends ShareStore {
     return {
       actor: `share:${s.id}:${s.revision}:${keyForSession(session)}`,
       scope: 'share:' + s.id,
+      bandwidthBudgets: this.bandwidthBudgets(s, access),
       base: target.ref,
       guard,
       ...(s.maxBytes === null ? {} : { cap: s.maxBytes }),
@@ -244,12 +247,16 @@ export class Shares extends ShareStore {
       },
     }
   }
+  private bandwidthBudgets(s: Share, access: ShareSession) {
+    return [
+      { key: 'share:' + s.id, rate: s.bytesPerSecond ?? 0 },
+      ...(access.user ? [this.identity.bandwidthBudget(access.user.id)] : []),
+    ]
+  }
   private transferOptions(s: Share, access: ShareSession, resource: string) {
     return {
       actor: 'share:' + s.id,
-      ...(s.bytesPerSecond === null
-        ? {}
-        : { bytesPerSecond: s.bytesPerSecond }),
+      bandwidthBudgets: this.bandwidthBudgets(s, access),
       onStart: (version: string) =>
         this.recordStart(
           s,
@@ -269,10 +276,11 @@ export class Shares extends ShareStore {
     request: Request,
     access: ShareSession,
     brand = defaultBrand,
+    peer?: string,
   ): Promise<Response> {
     const url = new URL(request.url)
     const unlock = /^\/_\/shares\/([^/]+)\/unlock$/.exec(url.pathname)
-    if (unlock?.[1]) return this.unlock(request, unlock[1], access, brand)
+    if (unlock?.[1]) return this.unlock(request, unlock[1], access, brand, peer)
     if (request.method !== 'GET' && request.method !== 'HEAD')
       return method('GET, HEAD')
     const parts = publicPath(request)

@@ -175,4 +175,30 @@ describe('file server over real HTTP', () => {
       expect(JSON.stringify(row)).not.toContain('private-')
     }
   })
+  test('audit labels keep known entry points and discard private path arguments', async () => {
+    for (const [path, label] of [
+      ['/', '/'],
+      ['/login', '/login'],
+      ['/logout', '/logout'],
+      ['/readyz', '/readyz'],
+      ['/healthz', '/healthz'],
+      ['/_/files?path=private-notes', '/_/files'],
+      ['/_/download?path=private-notes', '/_/download'],
+      ['/_/files-extra', 'internal'],
+      ['/private-notes', 'public'],
+    ] as const) {
+      const response = await f.fetch(path, {
+        method: 'POST',
+        headers: { origin: f.origin },
+      })
+      await response.body?.cancel()
+      const event = f.app.services.meta
+        .activity()
+        .find(
+          (item) => item.request_id === response.headers.get('X-Request-ID'),
+        )
+      expect(event?.operation).toBe(label)
+      expect(JSON.stringify(event)).not.toContain('private-notes')
+    }
+  })
 })

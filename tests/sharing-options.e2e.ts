@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { beforeEach, describe, test } from '@e2e-dev/web'
-import { expect, type TestFixtures } from 'e2e'
+import { expect, secrets, type TestFixtures } from 'e2e'
+import { createMember } from './helpers/member.ts'
 import { folder, shareItem } from './helpers/share.ts'
 import { filePayload, uploadFiles } from './helpers/transfer.ts'
 
@@ -203,5 +204,62 @@ describe('owner share options', { session: 'owner' }, () => {
     )
     expect(rateControl).toBe(false)
     expect(limit).toBe(kibInMib)
+  })
+  test('the administrator transfers link management to another authorized member', async ({
+    app,
+    screen,
+    browser,
+  }) => {
+    const member = unique('editor')
+    await app.open('/_/admin')
+    await createMember(screen, member)
+    for (const permission of ['share', 'read']) {
+      await app.open('/_/admin')
+      await screen
+        .getByText('Change a directory grant', { exact: true, visible: true })
+        .tap()
+      const form = screen.getByRole('form', 'Change a directory grant')
+      await form
+        .getByLabel('Principal')
+        .selectOption({ label: member + ' (user)' })
+      await form
+        .getByLabel('Permission', { exact: true })
+        .selectOption({ label: permission })
+      await form.getByLabel('Effect').selectOption({ label: 'allow' })
+      await form.getByRole('button', 'Save grant').tap()
+      await screen
+        .getByRole('row')
+        .filter({ hasText: member })
+        .filter({ hasText: permission })
+        .waitFor()
+    }
+    await app.open('/_/files?mount=e2e')
+    await shareItem(screen, 'handoff.txt')
+    await publicAccess(screen)
+    const path = await save(screen, 'Create link')
+    await edit(app, screen, path)
+    await screen.getByLabel('Link owner').selectOption({ label: member })
+    await publicAccess(screen)
+    await save(screen, 'Save changes')
+    await browser.clearCookies()
+    await app.open('/login')
+    await screen.getByLabel('Username').fill(member)
+    await screen
+      .getByLabel('Password', { exact: true })
+      .fill(secrets.get('memberPassword'))
+    await screen.getByRole('button', 'Sign in').tap()
+    await screen.getByRole('navigation', 'Storage').waitFor()
+    await edit(app, screen, path)
+    const canTransfer = await screen.getByLabel('Link owner').count()
+    const newAlias = unique('member-link')
+    await screen.getByRole('textbox', /^Link address/).fill(newAlias)
+    await publicAccess(screen)
+    const renamed = await save(screen, 'Save changes')
+
+    expect(canTransfer).toBe(0)
+    expect(renamed).toBe('/' + newAlias)
+    await expect(
+      screen.getByRole('article').filter({ hasText: renamed }),
+    ).toBeVisible()
   })
 })

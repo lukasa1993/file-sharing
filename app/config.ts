@@ -15,6 +15,7 @@ import {
   boolean,
   defaulted,
   object,
+  optional,
   parseSafe,
   string,
 } from 'remix/data-schema'
@@ -27,7 +28,17 @@ const mountConfig = object({
   readOnly: defaulted(boolean(), false),
   sentinel: string(),
 })
-const settings = object({ mounts: array(mountConfig) })
+const settings = object({
+  mounts: array(mountConfig),
+  oidc: optional(
+    object({
+      issuer: string(),
+      clientId: string(),
+      clientSecretFile: string(),
+      accounts: array(object({ subject: string(), username: string() })),
+    }),
+  ),
+})
 
 export function overlaps(a: string, b: string) {
   const rel = relative(a, b)
@@ -150,6 +161,48 @@ export function loadConfig(
     .trim()
   if (Buffer.byteLength(sessionSecret) < 32)
     throw new Error('Session signing secret must have at least 32 bytes')
+  const provider = parsed.value.oidc
+  let oidc: AppConfig['oidc']
+  if (provider) {
+    const issuer = new URL(provider.issuer)
+    const localIssuer =
+      local && ['127.0.0.1', '[::1]', 'localhost'].includes(issuer.hostname)
+    if (
+      (issuer.protocol !== 'https:' &&
+        !(issuer.protocol === 'http:' && localIssuer)) ||
+      issuer.username ||
+      issuer.password ||
+      issuer.search ||
+      issuer.hash ||
+      !isAbsolute(provider.clientSecretFile) ||
+      !provider.clientId.trim() ||
+      provider.clientId.length > 256 ||
+      provider.accounts.length > 4096
+    ) {
+      throw new Error('Invalid OIDC provider settings')
+    }
+    const subjects = new Set<string>()
+    for (const mapping of provider.accounts) {
+      if (
+        !mapping.subject ||
+        mapping.subject.length > 255 ||
+        subjects.has(mapping.subject) ||
+        !/^[\p{L}\p{N}_.@+-]{1,96}$/u.test(mapping.username)
+      )
+        throw new Error('Invalid OIDC account mapping')
+      subjects.add(mapping.subject)
+    }
+    const clientSecret = readSmallFile(provider.clientSecretFile, 4096, true)
+      .toString('utf8')
+      .trim()
+    if (!clientSecret) throw new Error('OIDC client secret file is empty')
+    oidc = {
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret,
+      accounts: provider.accounts,
+    }
+  }
   const iconPath = env.BRAND_ICON_FILE
   if (iconPath && !isAbsolute(iconPath))
     throw new Error('BRAND_ICON_FILE must be an absolute path')
@@ -158,6 +211,7 @@ export function loadConfig(
     locate(secretPath, topology),
     locate(settingsFile, topology),
     ...(iconPath ? [locate(iconPath, topology)] : []),
+    ...(provider ? [locate(provider.clientSecretFile, topology)] : []),
     ...(bootstrapFile ? [locate(bootstrapFile, topology)] : []),
   ]
   for (const name of [
@@ -226,6 +280,7 @@ export function loadConfig(
   }
   return {
     port,
+    ...(oidc ? { oidc } : {}),
     transferLimits,
     trustedProxies: (env.TRUSTED_PROXY_CIDRS || '')
       .split(',')

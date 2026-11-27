@@ -13,7 +13,10 @@ import {
 } from './render.ts'
 import { listTarHeaders, UnsupportedInspection } from './tar.ts'
 
-const readLimit = 64 * 1024
+import {
+  defaultContentLimits,
+  type ContentLimits,
+} from '../transfers/content-limits.ts'
 const plain = new Set(['.txt', '.log', '.csv', '.yaml', '.yml', '.toml'])
 const source = new Set([
   '.ts',
@@ -33,6 +36,7 @@ export async function inspectFile(
   ref: ResourceRef,
   guard: Guard,
   fs: Pick<Filesystem, 'openReadScoped'>,
+  limits: ContentLimits = defaultContentLimits,
 ) {
   if (request.method !== 'GET' && request.method !== 'HEAD')
     return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } })
@@ -60,9 +64,19 @@ export async function inspectFile(
         try {
           if (ext === '.tar')
             content = renderItems(
-              await listTarHeaders(handle, entry.size, request.signal),
+              await listTarHeaders(
+                handle,
+                entry.size,
+                request.signal,
+                limits.archivePreviewEntries,
+              ),
             )
           else if (markdown.has(ext) || source.has(ext) || plain.has(ext)) {
+            const readKiB = Math.min(
+              limits.textPreviewKiB,
+              limits.inspectionKiB,
+            )
+            const readLimit = readKiB * 1024
             const bytes = await readBounded(
               handle,
               Math.min(entry.size, readLimit),
@@ -83,7 +97,8 @@ export async function inspectFile(
             content = markdown.has(ext)
               ? renderMarkdown(text)
               : renderSource(text, source.has(ext))
-            if (truncated) note = 'Preview limited to the first 64 KiB.'
+            if (truncated)
+              note = 'Preview limited to the first ' + readKiB + ' KiB.'
           } else
             throw new UnsupportedInspection(
               'This format is available as a download.',

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { extname } from 'node:path'
+import { archiveFormats } from '../archive-formats.ts'
 import { Exit, Scope } from 'effect'
 import { runTask } from '../effects.ts'
 import type { FileHandle } from 'node:fs/promises'
@@ -16,19 +17,22 @@ import { version as statVersion } from '../filesystem/resolver.ts'
 import type { Filesystem } from '../filesystem/index.ts'
 import {
   ActivityRegistry,
+  type BandwidthBudget,
   bodyStream,
   chunks,
   preparationDigest,
   type PreparationTimeouts,
 } from './streams.ts'
 import { archiveRoots, gzipArchive, tarStream } from './archive.ts'
-import { Previews, TEXT_LIMIT, textExtensions } from './preview.ts'
+import { Previews, textExtensions } from './preview.ts'
+import { ContentPolicy } from './content-limits.ts'
 
 export type DownloadOptions = {
   actor?: string
   onStart?: (etag: string) => void
   onBytes?: (count: number) => void
   bytesPerSecond?: number
+  bandwidthBudgets?: readonly BandwidthBudget[]
   validateEntry?: (entry: Entry) => void
 }
 
@@ -56,6 +60,7 @@ export class Downloads {
     readonly fs: Filesystem,
     readonly jobs: ActivityRegistry,
     private readonly timeouts: PreparationTimeouts = new WeakMap(),
+    private readonly contentPolicy = new ContentPolicy(),
   ) {}
 
   private async stableDigest(
@@ -98,6 +103,11 @@ export class Downloads {
   ) {
     if (req.method !== 'HEAD' && req.method !== 'GET')
       throw new AppError(405, 'Use GET or HEAD.')
+    const query = new URL(req.url).searchParams
+    const probe = preview && query.get('probe') === '1'
+    const thumbnail = preview && query.get('thumbnail') === '1'
+    if (probe && req.method !== 'HEAD')
+      throw new AppError(405, 'Use HEAD to check preview availability.')
     const scope = Scope.makeUnsafe()
     const { handle, entry } = await runTask(
       Scope.provide(scope)(this.fs.openReadScoped(ref, guard)),
@@ -113,16 +123,34 @@ export class Downloads {
         options.actor ?? 'anonymous',
         entry.size,
         req,
-        options.bytesPerSecond,
+        options.bandwidthBudgets ?? options.bytesPerSecond,
       ))
+      const contentLimits = this.contentPolicy.current
       const representation = preview
         ? await this.previews.representation(
             handle,
             entry,
-            new URL(req.url).searchParams.get('thumbnail') === '1',
+            thumbnail,
             activity.signal,
+            contentLimits,
           )
         : null
+      if (probe || (thumbnail && !representation)) {
+        guard('read', ref)
+        options.validateEntry?.(entry)
+        return new Response(null, {
+          status: thumbnail && !representation ? 415 : 200,
+          headers: {
+            'Cache-Control': 'private, no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Type': representation?.type ?? 'application/octet-stream',
+            'Content-Disposition': disposition(
+              entry.name,
+              Boolean(representation),
+            ),
+          },
+        })
+      }
       const memory = representation?.bytes
       const size = memory?.length ?? entry.size
       const sha = memory
@@ -202,7 +230,7 @@ export class Downloads {
           textExtensions.has(extname(entry.name).toLowerCase())
         ) {
           response.headers.set('X-File-Version', entry.version)
-          if (entry.size > TEXT_LIMIT)
+          if (entry.size > contentLimits.textPreviewKiB * 1024)
             response.headers.set('X-Preview-Truncated', 'true')
         }
         if (stream) options.onStart?.('"' + sha + '"')
@@ -254,14 +282,16 @@ export class Downloads {
       guard,
       options.validateEntry,
     )
-    const format = new URL(req.url).searchParams.get('format') ?? 'tar'
-    if (format !== 'tar' && format !== 'tar.gz')
+    const extension = new URL(req.url).searchParams.get('format') ?? 'tar'
+    const format = archiveFormats.find(
+      (candidate) => candidate.extension === extension,
+    )
+    if (!format)
       throw new AppError(406, 'Supported archive formats are TAR and TAR.GZ.')
-    const compressed = format === 'tar.gz'
     const headers = {
-      'Content-Type': compressed ? 'application/gzip' : 'application/x-tar',
+      'Content-Type': format.mediaType,
       'Content-Disposition': disposition(
-        compressed ? 'shared-files.tar.gz' : 'shared-files.tar',
+        'shared-files.' + format.extension,
         false,
       ),
       'Cache-Control': 'private, no-store, no-transform',
@@ -274,7 +304,7 @@ export class Downloads {
       options.actor ?? 'anonymous',
       null,
       req,
-      options.bytesPerSecond,
+      options.bandwidthBudgets ?? options.bytesPerSecond,
     )
     try {
       // An archive stream has no stable range validator. This value only identifies the selection to usage accounting.
@@ -293,7 +323,9 @@ export class Downloads {
       )
       return new Response(
         bodyStream(
-          compressed ? gzipArchive(source, job.signal) : source,
+          format.extension === 'tar.gz'
+            ? gzipArchive(source, job.signal)
+            : source,
           job,
           async () => {},
           options.onBytes,

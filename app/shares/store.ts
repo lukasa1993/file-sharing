@@ -12,6 +12,7 @@ import {
   type ResourceRef,
   type User,
 } from '../contracts'
+import { pinMatchesVersion } from '../filesystem/resolver.ts'
 import type { Filesystem } from '../filesystem'
 import type { Identity } from '../identity'
 
@@ -129,7 +130,11 @@ function asDto(s: Share, row: Row): ShareDto {
 export type ShareFilesystem = Pick<Filesystem, 'stat' | 'list'>
 export type ShareIdentity = Pick<
   Identity,
-  'allowed' | 'getUser' | 'sessionActive'
+  | 'allowed'
+  | 'getUser'
+  | 'sessionActive'
+  | 'consumePasswordAttempt'
+  | 'bandwidthBudget'
 >
 const syncTask = <A>(run: () => A) =>
   Effect.try({ try: run, catch: asAppError })
@@ -661,17 +666,11 @@ export class ShareStore {
   protected validateEntry(s: Share, entry: Entry) {
     const target = s.targets.find((t) => sameRef(t.ref, entry.ref))
     if (!target) return
-    const fields = target.version.split(':')
-    const current = entry.version.split(':')
-    const birth = fields[5]
-    const sameIdentity =
-      target.kind === 'directory' && birth && birth !== '0'
-        ? current[0] === fields[0] &&
-          current[1] === fields[1] &&
-          current[5] === birth
-        : fields.length === 5
-          ? current.slice(0, 5).join(':') === target.version
-          : target.version === entry.version
+    const sameIdentity = pinMatchesVersion(
+      target.version,
+      entry.version,
+      target.kind === 'directory',
+    )
     if (target.kind !== entry.kind || (!s.latestAtPath && !sameIdentity)) {
       this.db.query('UPDATE shares SET broken=1 WHERE id=?').run(s.id)
       throw missing()

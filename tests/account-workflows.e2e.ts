@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { beforeEach, describe, test } from '@e2e-dev/web'
 import { expect, secrets, type TestFixtures } from 'e2e'
 import { createMember } from './helpers/member.ts'
+import { signInOwner } from './helpers/owner.ts'
 
 type Screen = TestFixtures['screen']
 
@@ -230,20 +231,28 @@ describe('accounts and administration', { session: 'owner' }, () => {
   }) => {
     await app.open('/_/admin')
     const custom = await form(screen, 'Set storage trash retention')
+    await custom.getByLabel('Storage').selectOption({ value: 'e2e' })
+    const storageRow = screen
+      .getByRole('table', 'Storage roots')
+      .getByRole('row')
+      .filter({ hasText: 'Files' })
     await custom
       .getByLabel('Retention in days (blank for workspace default)')
       .fill('14')
     await custom.getByRole('button', 'Save retention').tap()
-    await screen.getByRole('cell', '14 days', { exact: true }).waitFor()
+    await storageRow.getByRole('cell', '14 days', { exact: true }).waitFor()
 
     const restore = await form(screen, 'Set storage trash retention')
+    await restore.getByLabel('Storage').selectOption({ value: 'e2e' })
     await restore
       .getByLabel('Retention in days (blank for workspace default)')
       .fill('')
     await restore.getByRole('button', 'Save retention').tap()
 
     await expect(
-      screen.getByRole('cell').filter({ hasText: 'days (workspace default)' }),
+      storageRow
+        .getByRole('cell')
+        .filter({ hasText: 'days (workspace default)' }),
     ).toBeVisible()
   })
 
@@ -310,6 +319,19 @@ describe('accounts and administration', { session: 'owner' }, () => {
       .filter({ hasText: name })
       .filter({ hasText: home })
       .waitFor()
+    const bandwidth = await form(screen, 'Set transfer bandwidth')
+    await bandwidth
+      .getByLabel('User', { exact: true })
+      .selectOption({ label: name })
+    await bandwidth
+      .getByLabel('Bytes per second (blank for unlimited)')
+      .fill('8192')
+    await bandwidth.getByRole('button', 'Save bandwidth').tap()
+    await screen
+      .getByRole('row')
+      .filter({ hasText: name })
+      .filter({ hasText: '8 KB/s' })
+      .waitFor()
     const quota = await form(screen, 'Set upload quota')
     await quota
       .getByLabel('User', { exact: true })
@@ -338,6 +360,29 @@ describe('accounts and administration', { session: 'owner' }, () => {
     await expect(
       screen.getByText('Upload capacity exceeded.', { exact: false }),
     ).toBeVisible()
+
+    const [published] = await Promise.all([
+      browser.waitForResponse({ method: 'PATCH', url: '**/_/uploads/**' }),
+      screen.getByLabel('Choose files to upload').setInputFiles({
+        name: 'accepted.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('ok'),
+      }),
+    ])
+    expect(published.status).toBe(204)
+    await app.open('/_/account')
+    const profile = screen.getByRole('region', 'Profile')
+    await expect(profile).toContainText('2 B used of 3 B')
+    await expect(profile).toContainText('8 KB/s')
+    await browser.clearCookies()
+    await signInOwner(app, screen)
+    await app.open('/_/admin')
+    await expect(
+      screen
+        .getByRole('row')
+        .filter({ hasText: name })
+        .filter({ hasText: '8 KB/s' }),
+    ).toContainText('2 B used of 3 B')
   })
   test('an administrator can create a group from the native form when scripts are unavailable', async ({
     app,

@@ -1,5 +1,6 @@
 /** @jsxImportSource remix/component */
 import type { Action, Entry, ResourceRef } from '../contracts'
+import { archiveFormats } from '../archive-formats'
 import {
   appShell,
   csrfField,
@@ -32,13 +33,29 @@ export type ShareView = {
   broken?: boolean
   status?: string
 }
-export function shareEditor(csrf: string, mounts: MountView[]) {
+type ShareOwner = { id: string; username: string }
+export function shareEditor(
+  csrf: string,
+  mounts: MountView[],
+  owners?: ShareOwner[],
+) {
   return dialog(
     'share-editor',
     'Share files',
     <form id="share-form" method="post" action="/_/api/v1/shares">
       {csrfField(csrf)}
       <p class="selection-summary" data-share-summary></p>
+      {owners ? (
+        <label>
+          Link owner
+          <select name="ownerId">
+            <option value="">Keep current owner</option>
+            {owners.map((owner) => (
+              <option value={owner.id}>{owner.username}</option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <div data-target-editor hidden>
         <label class="check-note">
           <input type="checkbox" name="retarget" />
@@ -226,10 +243,17 @@ function operationsDialog() {
           <option value="overwrite">Replace existing file</option>
         </select>
       </label>
+      <div data-operation-progress hidden>
+        <p role="status" data-operation-status></p>
+        <progress aria-label="File operation progress"></progress>
+      </div>
       <p role="alert" data-form-error hidden></p>
       <div class="dialog-actions">
         <button type="button" data-close>
           Cancel
+        </button>
+        <button type="button" data-cancel-operation hidden>
+          Cancel operation
         </button>
         <button class="primary" data-operation-submit type="submit">
           Apply
@@ -262,21 +286,52 @@ function action(
     </button>
   )
 }
+function archiveActions() {
+  return archiveFormats.map((format) => (
+    <button
+      type="button"
+      class="file-action"
+      data-action="archive"
+      data-archive-format={format.extension}
+    >
+      {icon('archive', 16)}
+      {format.label}
+    </button>
+  ))
+}
 function breadcrumbs(page: FilesPage, mountLabel: string) {
+  const ref = page.ref
+  const anchors = [
+    ...(page.entryPoints || []),
+    ...(page.home ? [page.home] : []),
+  ]
+  const anchor = anchors
+    .filter(
+      (point) =>
+        point.mountId === ref.mountId &&
+        point.segments.every((part, index) => ref.segments[index] === part),
+    )
+    .sort((a, b) => b.segments.length - a.segments.length)[0]
+  const anchorParts = anchor?.segments || []
   return (
     <nav aria-label="Breadcrumb" class="crumbs">
       <a href="/_/files">{icon('folder', 16)}All files</a>
       {icon('chevron', 12)}
-      <a href={refUrl('/_/files', { mountId: page.ref.mountId, segments: [] })}>
-        {mountLabel}
+      <a
+        href={refUrl('/_/files', {
+          mountId: ref.mountId,
+          segments: anchorParts,
+        })}
+      >
+        {anchorParts.at(-1) || mountLabel}
       </a>
-      {page.ref.segments.map((part, i) => (
+      {ref.segments.slice(anchorParts.length).map((part, i) => (
         <span>
           {icon('chevron', 12)}
           <a
             href={refUrl('/_/files', {
-              mountId: page.ref.mountId,
-              segments: page.ref.segments.slice(0, i + 1),
+              mountId: ref.mountId,
+              segments: ref.segments.slice(0, anchorParts.length + i + 1),
             })}
           >
             {part}
@@ -438,7 +493,7 @@ export async function renderFiles(page: FilesPage) {
             <strong data-selection-count></strong>
             {action('share', 'Share', 'share')}
             {action('bulkRename', 'Rename items', 'file')}
-            {action('archive', 'Download archive', 'archive')}
+            {archiveActions()}
             {action('copy', 'Copy to', 'copy')}
             {action('move', 'Move to', 'folder')}
             {action('trash', 'Trash', 'trash')}
@@ -578,6 +633,14 @@ export async function renderFiles(page: FilesPage) {
             </nav>
           ) : null}
           <div class="folder-actions">
+            {can('manage') ? (
+              <a
+                class="text-button"
+                href={refUrl('/_/folder-permissions', page.ref)}
+              >
+                {icon('lock', 15)}Manage folder permissions
+              </a>
+            ) : null}
             {canUpload ? (
               <button
                 class="text-button"
@@ -607,7 +670,7 @@ export async function renderFiles(page: FilesPage) {
           {action('request', 'Request uploads', 'upload')}
           {action('favorite', 'Toggle favorite', 'star')}
           {action('rename', 'Rename', 'file')}
-          {action('archive', 'Download archive', 'archive')}
+          {archiveActions()}
           {action('copy', 'Copy to', 'copy')}
           {action('move', 'Move to', 'folder')}
           {action('trash', 'Move to trash', 'trash')}
@@ -617,15 +680,18 @@ export async function renderFiles(page: FilesPage) {
       {dialog(
         'preview',
         'Preview',
-        <div>
-          <h3 data-preview-title></h3>
+        <div class="gallery-surface" data-gallery-surface>
+          <h3 data-preview-title aria-live="polite"></h3>
           <div data-preview-body></div>
-          <nav class="gallery-nav" aria-label="Preview navigation">
+          <nav class="gallery-nav" aria-label="Image navigation" hidden>
             <button type="button" data-adjacent="-1">
               Previous
             </button>
             <button type="button" data-adjacent="1">
               Next
+            </button>
+            <button type="button" data-gallery-fullscreen aria-pressed="false">
+              Fullscreen
             </button>
           </nav>
           <a
@@ -692,7 +758,9 @@ export async function renderFiles(page: FilesPage) {
     page.theme,
   )
 }
-export async function renderShares(page: Shell & { shares: ShareView[] }) {
+export async function renderShares(
+  page: Shell & { shares: ShareView[]; owners?: ShareOwner[] },
+) {
   const body = (
     <section>
       <p class="folder-summary">
@@ -711,6 +779,7 @@ export async function renderShares(page: Shell & { shares: ShareView[] }) {
                 id: s.id,
                 alias: s.alias,
                 enabled: s.enabled,
+                ownerId: s.ownerId,
                 targets: s.targets,
                 access: s.access,
                 mode: s.mode,
@@ -774,7 +843,7 @@ export async function renderShares(page: Shell & { shares: ShareView[] }) {
           'share',
         )
       )}
-      {shareEditor(page.csrf, page.mounts)}
+      {shareEditor(page.csrf, page.mounts, page.owners)}
       {shareResult()}
       {dialog('share-history', 'Link history', <div data-history-list></div>)}
       {confirmDialog()}

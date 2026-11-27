@@ -48,6 +48,12 @@ import {
 
 export type Conflict = 'reject' | 'skip' | 'rename' | 'overwrite'
 export type Operation = 'copy' | 'move' | 'rename' | 'delete' | 'trash'
+export type CopyProgress = {
+  ref: ResourceRef
+  phase: 'copying' | 'verifying'
+  bytes: number
+  total: number
+}
 export type TrashItem = { id: string; ref: ResourceRef; deletedAt: number }
 type TrashRow = {
   id: string
@@ -130,6 +136,10 @@ export class Filesystem {
   private readonly publication: PublicationJournal
   private readonly retirements: RetirementJournal
   private resolver: Resolver
+  private readonly activeSearches = new Set<string>()
+  private readonly searchCounts = new Map<string, number>()
+  private searchMinute = -1
+  private searchRequests = 0
   private readonly queues: MountQueues
   constructor(
     private mounts: Mount[],
@@ -340,27 +350,82 @@ export class Filesystem {
   list(ref: ResourceRef, guard: Guard) {
     return runTask(this.listTask(ref, guard))
   }
-  search(ref: ResourceRef, query: string, guard: Guard) {
+  searchTask(
+    ref: ResourceRef,
+    query: string,
+    guard: Guard,
+    actor: string,
+    signal?: AbortSignal,
+  ) {
     if (!query.trim() || query.length > 256)
       fault(400, 'Enter a filename search')
-    return this.inspect(ref, async (r) => {
-      const pending = [ref],
-        matches: Entry[] = []
-      const needle = query.toLowerCase()
-      let scanned = 0
-      while (pending.length) {
-        const directory = pending.pop()
-        if (!directory) break
-        for (const item of await this.entries(r, directory, guard, () => {
-          if (++scanned > treeLimit)
-            fault(413, 'Search limit exceeded. Choose a smaller folder.')
-        })) {
-          if (item.name.toLowerCase().includes(needle)) matches.push(item)
-          if (item.kind === 'directory') pending.push(item.ref)
-        }
+    const admission = Effect.flatMap(Clock.currentTimeMillis, (now) => {
+      const minute = Math.floor(now / 60_000)
+      if (minute !== this.searchMinute) {
+        this.searchMinute = minute
+        this.searchRequests = 0
+        this.searchCounts.clear()
       }
-      return matches
+      const actorRequests = this.searchCounts.get(actor) ?? 0
+      if (this.activeSearches.has(actor) || actorRequests >= 12)
+        return Effect.fail(
+          new AppError(429, 'Search limit reached. Try again shortly.'),
+        )
+      if (this.activeSearches.size >= 2 || this.searchRequests >= 120)
+        return Effect.fail(
+          new AppError(
+            429,
+            'Other searches are in progress. Try again shortly.',
+          ),
+        )
+      this.activeSearches.add(actor)
+      this.searchCounts.set(actor, actorRequests + 1)
+      this.searchRequests++
+      return Effect.void
     })
+    return Effect.acquireUseRelease(
+      admission,
+      () =>
+        Effect.gen({ self: this }, function* () {
+          const pending = [ref]
+          const matches: Entry[] = []
+          const needle = query.toLowerCase()
+          let scanned = 0
+          while (pending.length) {
+            const directory = pending.pop()
+            if (!directory) break
+            // Yield the mount lock between directories so ordinary file operations can proceed.
+            const items = yield* this.inspectTask(directory, (root) =>
+              this.entries(root, directory, guard, () => {
+                if (signal?.aborted) fault(409, 'Search cancelled')
+                if (++scanned > treeLimit)
+                  fault(413, 'Search limit exceeded. Choose a smaller folder.')
+              }),
+            )
+            for (const item of items) {
+              if (item.name.toLowerCase().includes(needle)) matches.push(item)
+              if (item.kind === 'directory') pending.push(item.ref)
+            }
+          }
+          return matches
+        }),
+      () =>
+        Effect.sync(() => {
+          this.activeSearches.delete(actor)
+        }),
+    )
+  }
+  search(
+    ref: ResourceRef,
+    query: string,
+    guard: Guard,
+    actor = 'local',
+    signal?: AbortSignal,
+  ) {
+    return runTask(
+      this.searchTask(ref, query, guard, actor, signal),
+      signal ? { signal } : undefined,
+    )
   }
   space(mountId: string) {
     return this.queues.run([mountId], () =>
@@ -659,6 +724,7 @@ export class Filesystem {
     dest: FileHandle,
     s: BigIntStats,
     signal?: AbortSignal,
+    progress?: (phase: CopyProgress['phase'], bytes: number) => void,
   ) {
     const digest = createHash('sha256'),
       check = createHash('sha256'),
@@ -686,6 +752,7 @@ export class Filesystem {
         written += bytesWritten
       }
       position += bytesRead
+      progress?.('copying', position)
     }
     await dest.utimes(s.atime, s.mtime)
     await dest.sync()
@@ -700,6 +767,7 @@ export class Filesystem {
       if (!bytesRead) fault(503, 'Copy verification failed')
       check.update(chunk.subarray(0, bytesRead))
       position += bytesRead
+      progress?.('verifying', position)
     }
     if (version(await source.stat({ bigint: true })) !== version(s))
       fault(409, 'Source changed during copy')
@@ -802,6 +870,7 @@ export class Filesystem {
     guard: Guard,
     conflict: Conflict = 'reject',
     signal?: AbortSignal,
+    onProgress?: (event: CopyProgress) => void,
   ): Promise<ResourceRef | null> {
     if (signal?.aborted) fault(409, 'Operation cancelled')
     checkRef(src)
@@ -965,6 +1034,15 @@ export class Filesystem {
                                     outputHandle,
                                     item.s,
                                     signal,
+                                    onProgress
+                                      ? (phase, bytes) =>
+                                          onProgress({
+                                            phase,
+                                            bytes,
+                                            ref: item.ref,
+                                            total: Number(item.s.size),
+                                          })
+                                      : undefined,
                                   )
                                 },
                               )

@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from '../app/application.ts'
 import { loadConfig } from '../app/config.ts'
+import { addCopyStorage } from './fixtures/copy-storage.ts'
 import { initialize } from '../scripts/ops.ts'
 import { listenHttp } from '../app/transport.ts'
 
 export type Fixture = Awaited<ReturnType<typeof fixture>>
-export async function fixture() {
+export async function fixture(options: { copyStorage?: boolean } = {}) {
   const temp = await mkdtemp(join(tmpdir(), 'fileserver-integration-'))
   const password = randomBytes(24).toString('base64url'),
     storage = join(temp, 'state/storage')
@@ -33,6 +34,7 @@ export async function fixture() {
   try {
     const root = join(temp, 'state')
     await initialize(root, 'fixture-owner', { password, mountId: 'e2e' })
+    if (options.copyStorage) await addCopyStorage(root)
     await writeFile(join(storage, 'handoff.txt'), 'A real handoff\n')
     const env = {
       PUBLIC_ORIGIN: origin,
@@ -45,7 +47,10 @@ export async function fixture() {
     instance = await createApp(loadConfig(env))
     const fetchPath = (path: string, init?: RequestInit) =>
       fetch(new URL(path, origin), { redirect: 'manual', ...init })
-    async function signIn() {
+    async function signIn(credentials?: {
+      username: string
+      password: string
+    }) {
       const login = await fetchPath('/login'),
         html = await login.text()
       const cookie = login.headers.getSetCookie()[0]?.split(';')[0],
@@ -55,17 +60,19 @@ export async function fixture() {
         method: 'POST',
         headers: { cookie, origin },
         body: new URLSearchParams({
-          username: 'fixture-owner',
-          password,
+          ...(credentials ?? { username: 'fixture-owner', password }),
           csrf,
         }),
       })
       const newCookie = auth.headers.getSetCookie()[0]?.split(';')[0]
       if (auth.status !== 303 || !newCookie)
         throw new Error('Fixture login failed: ' + auth.status)
-      const page = await fetchPath('/_/files?mount=e2e', {
-        headers: { Cookie: newCookie },
-      })
+      const page = await fetchPath(
+        credentials ? '/_/account' : '/_/files?mount=e2e',
+        {
+          headers: { Cookie: newCookie },
+        },
+      )
       const fresh = csrfFrom(await page.text())
       return { cookie: newCookie, origin, 'X-CSRF-Token': fresh }
     }

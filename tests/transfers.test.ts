@@ -915,6 +915,60 @@ describe('archive and previews', () => {
     ).rejects.toThrow()
     expect(await readFile(join(root, name), 'utf8')).toBe('small')
   })
+  test('converts supported Linux raster formats into inline bounded WebP previews', async () => {
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ2YAAAAASUVORK5CYII=',
+      'base64',
+    )
+    const formats = {
+      png,
+      jpg: await new Bun.Image(png).jpeg().bytes(),
+      webp: await new Bun.Image(png).webp().bytes(),
+      gif: Buffer.from(
+        'R0lGODdhAgACAIEAAP///wAAAAAAAAAAACwAAAAAAgACAAAIBgABCAQQEAA7',
+        'base64',
+      ),
+      bmp: Buffer.from(
+        'Qk1GAAAAAAAAADYAAAAoAAAAAgAAAAIAAAABABgAAAAAABAAAADEDgAAxA4AAAAAAAAAAAAA////////AAD///////8AAA==',
+        'base64',
+      ),
+    }
+    for (const [format, sample] of Object.entries(formats)) {
+      const name = 'source.' + format
+      await writeFile(join(root, name), sample)
+      const preview = await transfers.preview(request(), ref(name), ok)
+      expect(preview.headers.get('content-type')).toBe('image/webp')
+      expect(preview.headers.get('content-disposition')).toStartWith('inline')
+      const result = await new Bun.Image(await preview.bytes()).metadata()
+      expect(result.format).toBe('webp')
+      expect([result.width, result.height]).toEqual(
+        ['gif', 'bmp'].includes(format) ? [2, 2] : [1, 1],
+      )
+    }
+  })
+  test('metadata-only preview discovery never starts a whole-file hash or sends original content', async () => {
+    await writeFile(join(root, 'recording.bin'), Buffer.alloc(1024 * 1024, 25))
+    const hashed: boolean[] = []
+    const probe = new Request(base + '/_/preview?probe=1', { method: 'HEAD' })
+    transfers.setPreparationTimeout(probe, (active) => hashed.push(active))
+    const result = await transfers.preview(probe, ref('recording.bin'), ok)
+    expect(result.status).toBe(200)
+    expect(result.headers.get('content-disposition')).toStartWith('attachment')
+    expect(result.headers.get('etag')).toBeNull()
+    expect(hashed).toEqual([])
+    expect(transfers.active()).toHaveLength(0)
+    await expect(
+      transfers.preview(new Request(probe.url), ref('recording.bin'), ok),
+    ).rejects.toThrow('Use HEAD')
+    const original = new Request(base + '/_/preview', { method: 'HEAD' })
+    transfers.setPreparationTimeout(original, (active) => hashed.push(active))
+    expect(
+      (await transfers.preview(original, ref('recording.bin'), ok)).headers.get(
+        'etag',
+      ),
+    ).toBeTruthy()
+    expect(hashed).toEqual([true, false])
+  })
   test('decodes and bounds a real thumbnail and rejects an incorrectly labelled input', async () => {
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ2YAAAAASUVORK5CYII=',

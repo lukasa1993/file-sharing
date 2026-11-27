@@ -6,6 +6,10 @@ import { relative, resolve } from 'node:path'
 import ts from 'typescript'
 
 import { critical, sourceFiles } from './quality-sources.ts'
+import {
+  readVerifiedMutation,
+  type MutationReport,
+} from './mutation/results.ts'
 
 async function command(args: string[], env = process.env) {
   const child = Bun.spawn(args, {
@@ -187,11 +191,6 @@ function gitPaths(args: string[]) {
   return result.stdout.toString().split('\0').filter(Boolean)
 }
 
-interface MutationReport {
-  config: { mutate: string[] }
-  files: Parameters<typeof calculateMetrics>[0]
-}
-
 async function mutationFiles(all: boolean) {
   const sources = await sourceFiles()
   if (all) return sources
@@ -235,8 +234,23 @@ async function mutationMatrix(all: boolean) {
 function reviewMutation(files: MutationReport['files']) {
   let survivors = 0
   for (const [file, { mutants }] of Object.entries(files)) {
-    if (!critical.test(file)) continue
     for (const mutant of mutants) {
+      if (
+        mutant.status === 'RuntimeError' ||
+        mutant.status === 'CompileError'
+      ) {
+        console.error(
+          file +
+            ':' +
+            mutant.location.start.line +
+            ' #' +
+            mutant.id +
+            ' ' +
+            mutant.status,
+        )
+        continue
+      }
+      if (!critical.test(file)) continue
       if (mutant.status !== 'Survived' && mutant.status !== 'NoCoverage')
         continue
       console.error(
@@ -247,9 +261,14 @@ function reviewMutation(files: MutationReport['files']) {
   }
   const metrics = calculateMetrics(files).metrics
   console.log(
-    `Mutation score: ${metrics.totalDetected}/${metrics.totalValid} detected, ${metrics.mutationScore.toFixed(2)}%. Pending: ${metrics.pending}. Critical mutants requiring review: ${survivors}.`,
+    `Mutation score: ${metrics.totalDetected}/${metrics.totalValid} detected, ${metrics.mutationScore.toFixed(2)}%. Pending: ${metrics.pending}. Runtime errors: ${metrics.runtimeErrors}. Compile errors: ${metrics.compileErrors}. Critical mutants requiring review: ${survivors}.`,
   )
-  return metrics.pending || survivors || metrics.mutationScore < 85 ? 1 : 0
+  return metrics.pending ||
+    metrics.runtimeErrors ||
+    survivors ||
+    metrics.mutationScore < 85
+    ? 1
+    : 0
 }
 
 async function mutation(all: boolean) {
@@ -266,19 +285,7 @@ async function mutation(all: boolean) {
       cwd: directory,
       absolute: true,
     })) {
-      const report: MutationReport = JSON.parse(await readFile(name, 'utf8'))
-      for (const file of report.config.mutate) {
-        if (!wanted.delete(file))
-          throw new Error('Unexpected or repeated mutation input: ' + file)
-      }
-      for (const [file, entry] of Object.entries(report.files)) {
-        if (
-          !report.config.mutate.includes(file) ||
-          entry.source !== (await readFile(file, 'utf8'))
-        )
-          throw new Error('Mutation report source mismatch: ' + file)
-        combined[file] = entry
-      }
+      Object.assign(combined, await readVerifiedMutation(name, wanted))
     }
     if (wanted.size)
       throw new Error('Missing mutation shards for: ' + [...wanted].join(', '))
@@ -286,19 +293,39 @@ async function mutation(all: boolean) {
   }
   const report = '.quality/mutation/report.json'
   await rm(report, { force: true })
+  await rm('.quality/mutation/manifest.json', { force: true })
   const result = await runStryker(selected)
   if (!(await Bun.file(report).exists())) return result || 1
-  const data: MutationReport = JSON.parse(await readFile(report, 'utf8'))
-  return reviewMutation(data.files) || result
+  const wanted = new Set(selected)
+  const files = await readVerifiedMutation(report, wanted)
+  if (wanted.size)
+    throw new Error('Missing mutation inputs: ' + [...wanted].join(', '))
+  return reviewMutation(files) || result
 }
 
 async function runStryker(files: string[], shard = false) {
-  // The command runner exposes the whole suite as one test. A changed assertion,
-  // dependency or collaborating module must invalidate a cached kill.
+  // A changed assertion, dependency, fixture, or collaborating module
+  // must invalidate cached kills and their coverage-based test selections.
+  const node = Bun.spawnSync(['node', '--version'])
+  if (node.exitCode !== 0) throw new Error('Node is required for Stryker.')
   const hash = createHash('sha256')
-    .update(Bun.version)
+    .update(
+      JSON.stringify([
+        Bun.version,
+        node.stdout.toString().trim(),
+        process.platform,
+        process.arch,
+        process.env.E2E_BROWSER || 'chromium',
+      ]),
+    )
     .update(JSON.stringify(files))
-  const inputs = ['server.ts', 'bun.lock', 'package.json', 'tsconfig.json']
+  const inputs = [
+    'server.ts',
+    'bun.lock',
+    'package.json',
+    'tsconfig.json',
+    'e2e.config.ts',
+  ]
   for (const directory of ['app', 'public', 'scripts', 'tests']) {
     for await (const path of new Bun.Glob('**/*').scan({
       cwd: directory,
@@ -356,7 +383,7 @@ async function quality(release: boolean) {
       'test:security',
       'test:integration',
       'test:performance',
-      'test:e2e:fixture',
+      'test:e2e:packaged',
     ]) {
       if ((await command(['bun', 'run', gate])) !== 0) failed = true
     }

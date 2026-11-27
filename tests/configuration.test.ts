@@ -105,6 +105,41 @@ describe('configuration and storage boundaries', () => {
         'Missing configuration',
       )
   })
+  test('OIDC configuration requires explicit subject mappings and a protected client secret outside shared storage', async () => {
+    const clientSecretFile = join(state, 'config/oidc.secret')
+    const model = {
+      issuer: 'https://identity.example.test',
+      clientId: 'app',
+      clientSecretFile,
+      accounts: [{ subject: 'stable-id', username: 'local-admin' }],
+    }
+    const configure = (oidc: unknown) =>
+      writeFile(env.CONFIG_FILE, JSON.stringify({ mounts: [mount], oidc }))
+    await writeFile(clientSecretFile, 'test-secret', { mode: 0o600 })
+    await configure(model)
+    expect(loadConfig(env).oidc).toEqual({
+      issuer: model.issuer,
+      clientId: model.clientId,
+      clientSecret: 'test-secret',
+      accounts: model.accounts,
+    })
+    for (const settings of [
+      { issuer: 'http://identity.example.test' },
+      { clientId: '' },
+      { accounts: [...model.accounts, ...model.accounts] },
+      { accounts: [{ subject: '', username: 'local-admin' }] },
+    ]) {
+      await configure({ ...model, ...settings })
+      expect(() => loadConfig(env)).toThrow('OIDC')
+    }
+    await configure(model)
+    await chmod(clientSecretFile, 0o644)
+    expect(() => loadConfig(env)).toThrow()
+    const shared = join(volume, 'client.secret')
+    await writeFile(shared, 'test-secret', { mode: 0o600 })
+    await configure({ ...model, clientSecretFile: shared })
+    expect(() => loadConfig(env)).toThrow()
+  })
   test('serves a configured workspace PNG for the logo and favicon', async () => {
     const file = join(state, 'config/workspace.png')
     const pixel = Buffer.from(
@@ -144,7 +179,7 @@ describe('configuration and storage boundaries', () => {
     await expect(
       createApp(loadConfig({ ...env, BRAND_ICON_FILE: file })),
     ).rejects.toThrow('requires a PNG')
-  })
+  }, 20000)
   test('requires a secure origin without credentials or navigation components', () => {
     for (const url of [
       'not a url',

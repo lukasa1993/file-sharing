@@ -22,7 +22,7 @@ export const defaultTransferLimits: Readonly<Required<TransferOptions>> =
 
 export type ActiveTransfer = {
   id: string
-  kind: 'upload' | 'download' | 'archive'
+  kind: 'upload' | 'download' | 'archive' | 'copy' | 'move'
   actor: string
   bytes: number
   total: number | null
@@ -60,7 +60,11 @@ class BandwidthSchedule {
     )
   }
 }
-type RateLimit = { rate: number; schedule: BandwidthSchedule }
+export type BandwidthBudget = { key: string; rate: number | (() => number) }
+type RateLimit = { rate: BandwidthBudget['rate']; schedule: BandwidthSchedule }
+function currentRate(limit: RateLimit) {
+  return typeof limit.rate === 'number' ? limit.rate : limit.rate()
+}
 
 export class Activity {
   readonly id = randomUUID()
@@ -69,7 +73,6 @@ export class Activity {
   readonly signal: AbortSignal
   bytes = 0
   initialBytes = 0
-  readonly bandwidth: number
   readonly finished = Promise.withResolvers<void>()
 
   constructor(
@@ -80,16 +83,24 @@ export class Activity {
     private limits: readonly RateLimit[],
     readonly remove: () => void,
   ) {
-    this.bandwidth = limits.length
-      ? Math.min(...limits.map((limit) => limit.rate))
-      : 0
     this.signal = AbortSignal.any([signal, this.aborter.signal])
+  }
+
+  quantum(maximum: number) {
+    let size = maximum
+    for (const limit of this.limits) {
+      const rate = currentRate(limit)
+      if (rate > 0) size = Math.min(size, Math.max(1, Math.floor(rate / 8)))
+    }
+    return size
   }
 
   async meter(bytes: number) {
     this.signal.throwIfAborted()
     for (const limit of this.limits) {
-      await Effect.runPromise(limit.schedule.take(bytes, limit.rate), {
+      const rate = currentRate(limit)
+      if (rate <= 0) continue
+      await Effect.runPromise(limit.schedule.take(bytes, rate), {
         signal: this.signal,
       })
     }
@@ -134,7 +145,7 @@ export class ActivityRegistry {
     actor: string,
     total: number | null,
     req: Request,
-    bandwidth?: number,
+    bandwidth?: number | readonly BandwidthBudget[],
     termination?: AbortSignal,
   ) {
     if (this.stopping) throw new AppError(503, 'Transfers are stopping.')
@@ -157,15 +168,22 @@ export class ActivityRegistry {
         rate: this.options.bytesPerSecond,
         schedule: new BandwidthSchedule(this.clock),
       })
-    let shared = this.actorBandwidth.get(actor)
-    if (bandwidth && bandwidth > 0) {
+    const budgets =
+      typeof bandwidth === 'number'
+        ? [{ key: actor, rate: bandwidth }]
+        : (bandwidth ?? [])
+    const sharedBudgets: { active: number }[] = []
+    for (const budget of budgets) {
+      if (budget.rate === 0) continue
+      let shared = this.actorBandwidth.get(budget.key)
       if (!shared) {
         shared = { schedule: new BandwidthSchedule(this.clock), active: 0 }
-        this.actorBandwidth.set(actor, shared)
+        this.actorBandwidth.set(budget.key, shared)
       }
       shared.active++
-      limits.push({ rate: bandwidth, schedule: shared.schedule })
-    } else shared = undefined
+      sharedBudgets.push(shared)
+      limits.push({ rate: budget.rate, schedule: shared.schedule })
+    }
     const activity = new Activity(
       kind,
       actor,
@@ -174,7 +192,7 @@ export class ActivityRegistry {
       limits,
       () => {
         if (this.jobs.delete(activity.id)) {
-          if (shared) shared.active--
+          for (const budget of sharedBudgets) budget.active--
           Effect.runSync(this.permits.release(1))
           activity.finished.resolve()
         }
@@ -194,9 +212,15 @@ export class ActivityRegistry {
     await Promise.all(jobs.map((job) => job.finished.promise))
     this.actorBandwidth.clear()
   }
-  cancel(id: string) {
+  cancel(id: string, operationOwner?: string) {
     const job = this.jobs.get(id)
-    if (!job) return false
+    if (
+      !job ||
+      (operationOwner !== undefined &&
+        (job.actor !== operationOwner ||
+          (job.kind !== 'copy' && job.kind !== 'move')))
+    )
+      return false
     job.aborter.abort(new Error('Transfer cancelled'))
     return true
   }
@@ -266,11 +290,18 @@ export async function readBounded(handle: FileHandle, size: number) {
   return result
 }
 
-async function* pacedChunks(source: AsyncGenerator<Uint8Array>, rate: number) {
-  const quantum = Math.max(1, Math.floor(rate / 8))
+async function* pacedChunks(
+  source: AsyncGenerator<Uint8Array>,
+  activity: Activity,
+) {
   for await (const chunk of source) {
-    for (let offset = 0; offset < chunk.byteLength; offset += quantum) {
-      yield chunk.subarray(offset, offset + quantum)
+    let offset = 0
+    while (offset < chunk.byteLength) {
+      const size = activity.quantum(chunk.byteLength - offset)
+      yield offset === 0 && size === chunk.byteLength
+        ? chunk
+        : chunk.subarray(offset, offset + size)
+      offset += size
     }
   }
 }
@@ -282,8 +313,7 @@ export function bodyStream(
   release: () => Promise<void>,
   onBytes?: (bytes: number) => void,
 ): ReadableStream<Uint8Array> {
-  const output =
-    activity.bandwidth > 0 ? pacedChunks(source, activity.bandwidth) : source
+  const output = pacedChunks(source, activity)
   let closed = false
   let pendingBytes = 0
   const flush = () => {

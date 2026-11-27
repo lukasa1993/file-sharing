@@ -19,6 +19,7 @@ import { Identity } from './identity/index.ts'
 import { Metadata, initializeMetadata } from './metadata.ts'
 import { Shares } from './shares/index.ts'
 import { Transfers } from './transfers/index.ts'
+import { ContentPolicy } from './transfers/content-limits.ts'
 import { counters, maintenanceLoop, retryDatabaseSetup } from './monitoring.ts'
 
 export const Configuration = Context.Service<AppConfig>(
@@ -104,8 +105,18 @@ const transferLayer = Layer.effect(
       fs = yield* Storage,
       config = yield* Configuration,
       clock = yield* Clock.Clock
+    const metadata = yield* AppMetadata
     const service = yield* Effect.acquireRelease(
-      Effect.sync(() => new Transfers(db, fs, config.transferLimits, clock)),
+      Effect.sync(
+        () =>
+          new Transfers(
+            db,
+            fs,
+            config.transferLimits,
+            clock,
+            new ContentPolicy(metadata),
+          ),
+      ),
       (t) => Effect.promise(() => t.shutdown()),
     )
     yield* attempt(() => service.cleanup())

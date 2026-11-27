@@ -4,10 +4,11 @@ import { listTarHeaders, UnsupportedInspection } from '../inspection/tar.ts'
 import { AppError, type Entry } from '../contracts.ts'
 import { readBounded } from './streams.ts'
 
-export const TEXT_LIMIT = 256 * 1024
+import { defaultContentLimits, type ContentLimits } from './content-limits.ts'
 export const textExtensions = new Set([
   '.txt',
   '.md',
+  '.markdown',
   '.log',
   '.csv',
   '.json',
@@ -15,6 +16,7 @@ export const textExtensions = new Set([
   '.yml',
   '.toml',
   '.ts',
+  '.tsx',
   '.css',
   '.py',
   '.go',
@@ -103,10 +105,15 @@ export class Previews {
     entry: Entry,
     thumbnail: boolean,
     signal: AbortSignal,
+    limits: ContentLimits = defaultContentLimits,
   ): Promise<Preview | null> {
     const ext = extname(entry.name).toLowerCase()
+    if (thumbnail && !imageExtensions.has(ext)) return null
     if (textExtensions.has(ext)) {
-      const bytes = await readBounded(handle, Math.min(entry.size, TEXT_LIMIT))
+      const bytes = await readBounded(
+        handle,
+        Math.min(entry.size, limits.textPreviewKiB * 1024),
+      )
       try {
         const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes, {
           stream: bytes.length < entry.size,
@@ -119,7 +126,12 @@ export class Previews {
     }
     if (ext === '.tar') {
       try {
-        const entries = await listTarHeaders(handle, entry.size, signal)
+        const entries = await listTarHeaders(
+          handle,
+          entry.size,
+          signal,
+          limits.archivePreviewEntries,
+        )
         const listing = entries.map(
           (item) =>
             item.name +
@@ -131,8 +143,13 @@ export class Previews {
         throw error
       }
     }
-    if (imageExtensions.has(ext) && entry.size <= 16 * 1024 * 1024) {
-      const key = entry.ref.mountId + ':' + entry.version
+    if (
+      imageExtensions.has(ext) &&
+      entry.size <= limits.imageInputMiB * 1024 ** 2
+    ) {
+      const key = [entry.ref.mountId, entry.version, limits.imagePixels].join(
+        ':',
+      )
       const cached = thumbnail && this.thumbnails.get(key)
       if (cached) return { type: 'image/webp', bytes: cached }
       if (this.decoding >= 2)
@@ -141,8 +158,10 @@ export class Previews {
       try {
         const bytes = await readBounded(handle, entry.size)
         if (!rasterSignature(ext, bytes)) return null
-        const pipeline = new Bun.Image(bytes, { maxPixels: 16_000_000 })
+        const pipeline = new Bun.Image(bytes, { maxPixels: limits.imagePixels })
         const meta = await pipeline.metadata()
+        if (meta.width > Math.floor(limits.imagePixels / meta.height))
+          return null
         const maximum = thumbnail ? 256 : 2048
         const width = Math.min(meta.width, maximum)
         const height = Math.min(meta.height, maximum)

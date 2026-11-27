@@ -10,6 +10,10 @@ export function initializeIdentitySchema(db: Database) {
       enabled INTEGER NOT NULL DEFAULT 1,
       quota INTEGER CHECK(quota IS NULL OR quota >= 0)
     );
+    CREATE TABLE IF NOT EXISTS auth_user_bandwidth (
+      userId TEXT PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE,
+      rate INTEGER NOT NULL CHECK(rate > 0)
+    );
     CREATE TABLE IF NOT EXISTS auth_groups (
       id TEXT PRIMARY KEY, name TEXT COLLATE NOCASE NOT NULL UNIQUE
     );
@@ -30,6 +34,15 @@ export function initializeIdentitySchema(db: Database) {
       PRIMARY KEY (subjectType, subjectId, mountId, path, permission)
     );
     CREATE INDEX IF NOT EXISTS auth_grant_lookup ON auth_grants(mountId,permission,subjectType,subjectId);
+    CREATE TABLE IF NOT EXISTS auth_directory_grants (
+      issuer TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      subjectType TEXT NOT NULL CHECK(subjectType IN ('user','group')),
+      subjectId TEXT NOT NULL, mountId TEXT NOT NULL, path TEXT NOT NULL,
+      permission TEXT NOT NULL CHECK(permission <> 'manage'),
+      PRIMARY KEY (issuer,mountId,path,subjectType,subjectId,permission)
+    );
+    CREATE INDEX IF NOT EXISTS auth_directory_recipient
+      ON auth_directory_grants(mountId,permission,subjectType,subjectId);
     CREATE TABLE IF NOT EXISTS auth_sessions (
       id TEXT PRIMARY KEY, publicId TEXT NOT NULL UNIQUE,
       userId TEXT REFERENCES auth_users(id) ON DELETE CASCADE,

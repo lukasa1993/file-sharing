@@ -46,7 +46,15 @@ export type Entry = {
   version: string
   permissions?: Action[]
 }
+export type OidcConfig = {
+  issuer: string
+  clientId: string
+  clientSecret: string
+  accounts: readonly { subject: string; username: string }[]
+}
+
 export type AppConfig = {
+  oidc?: OidcConfig
   dataDir: string
   publicOrigin: string
   sessionSecret: string

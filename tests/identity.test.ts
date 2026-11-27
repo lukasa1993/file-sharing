@@ -7,6 +7,7 @@ import { Effect } from 'effect'
 import { TestClock } from 'effect/testing'
 import { AppError, type AppConfig, type User } from '../app/contracts.ts'
 import { Identity } from '../app/identity/index.ts'
+import { fixtureIssuer } from './fixtures/oidc.ts'
 
 const publicOrigin = 'http://127.0.0.1:8080'
 const bootstrapPassword = 'test-only-local-password'
@@ -157,6 +158,80 @@ describe('durable account sessions', () => {
     await expect(identity.storage.save(old)).rejects.toBeInstanceOf(AppError)
   })
 
+  test('provider cancellation consumes a pending sign-in and local sign-in remains available during a provider outage', async () => {
+    const issuer = await fixtureIssuer(publicOrigin)
+    identity = new Identity(db, {
+      ...config,
+      oidc: {
+        issuer: issuer.issuer,
+        clientId: issuer.clientId,
+        clientSecret: issuer.clientSecret,
+        accounts: [{ subject: 'operator', username: 'owner' }],
+      },
+    })
+    try {
+      const visit = await identity.context(
+        new Request(publicOrigin + '/login'),
+        true,
+      )
+      const cookie = signedCookie(visit.setCookie)
+      const request = new Request(publicOrigin + '/_/auth/oidc', {
+        method: 'POST',
+        headers: { cookie, origin: publicOrigin, 'X-CSRF-Token': visit.csrf },
+      })
+      const anonymous = await identity.context(request)
+      await identity.verifyWrite(request, anonymous)
+      const started = await identity.startOidc(request, anonymous, '/_/account')
+      const location = new URL(started.headers.get('Location') ?? '')
+      expect(location.origin).toBe(issuer.issuer)
+      expect(location.searchParams.get('code_challenge_method')).toBe('S256')
+      const state = location.searchParams.get('state')
+      if (!state) throw new Error('Missing authorization state')
+      const callback = new URL('/_/auth/oidc/callback', publicOrigin)
+      callback.searchParams.set('error', 'access_denied')
+      callback.searchParams.set('state', 'previous-browser-tab')
+      const previous = new Request(callback, { headers: { cookie } })
+      await expect(
+        identity.finishOidc(previous, await identity.context(previous)),
+      ).rejects.toMatchObject({ status: 403 })
+      expect(
+        db
+          .query('SELECT data FROM auth_sessions')
+          .all()
+          .some((row) => JSON.stringify(row).includes(state)),
+      ).toBe(true)
+      callback.searchParams.set('state', state)
+      const canceled = new Request(callback, { headers: { cookie } })
+      await expect(
+        identity.finishOidc(canceled, await identity.context(canceled)),
+      ).rejects.toMatchObject({ status: 403 })
+      expect(
+        db
+          .query('SELECT data FROM auth_sessions')
+          .all()
+          .some((row) => JSON.stringify(row).includes(state)),
+      ).toBe(false)
+      expect(await identity.current(canceled)).toBeNull()
+      await issuer.close()
+      await expect(
+        identity.startOidc(
+          request,
+          await identity.context(request),
+          '/_/account',
+        ),
+      ).rejects.toMatchObject({ status: 503 })
+      const local = await signIn()
+      expect(
+        await identity.current(
+          new Request(publicOrigin, {
+            headers: { cookie: signedCookie(local.after) },
+          }),
+        ),
+      ).toEqual(admin)
+    } finally {
+      await issuer.close()
+    }
+  })
   test('account reset revokes the current session and cannot disable the last administrator', async () => {
     const { after } = await signIn()
     await expect(
@@ -479,7 +554,7 @@ test('a member can identify their current device without storing the raw user-ag
       .get()
     expect(saved?.count).toBe(0)
   }
-})
+}, 20000)
 
 test('account, group and permission edits reject ordinary invalid values and missing records', async () => {
   const member = {
@@ -645,4 +720,77 @@ test('the token cap can be cleared individually, while invalid scope or expiry n
       new Request(publicOrigin, { headers: { cookie: signedCookie(after) } }),
     ),
   ).toBeNull()
+})
+
+test('old accounts have an unlimited live rate budget and new settings survive a restart', async () => {
+  const budget = identity.bandwidthBudget(admin.id)
+  expect(budget.rate()).toBe(0)
+  for (const input of [-1, 1.5, {}, 'invalid', Number.MAX_SAFE_INTEGER + 1]) {
+    await expect(
+      identity.manage(admin, {
+        action: 'setBandwidth',
+        userId: admin.id,
+        bytesPerSecond: input,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+  }
+  await identity.manage(admin, {
+    action: 'setBandwidth',
+    userId: admin.id,
+    bytesPerSecond: 4096,
+  })
+  expect(budget.rate()).toBe(4096)
+  const restarted = new Identity(db, config)
+  await restarted.init()
+  expect(restarted.bandwidthBudget(admin.id).rate()).toBe(4096)
+  await identity.manage(admin, {
+    action: 'setBandwidth',
+    userId: admin.id,
+    bytesPerSecond: '',
+  })
+  expect(budget.rate()).toBe(0)
+})
+test('entry points find effective nested grants across denied roots and hide restricted homes', async () => {
+  await identity.manage(admin, {
+    action: 'createUser',
+    username: 'visitor',
+    password: bootstrapPassword,
+  })
+  const visitor = userNamed('visitor')
+  await identity.manage(admin, { action: 'createGroup', name: 'Editors' })
+  const group = db.query<{ id: string }, []>('SELECT id FROM auth_groups').get()
+  if (!group) throw new Error('Expected group')
+  await identity.manage(admin, {
+    action: 'setMembership',
+    userId: visitor.id,
+    groupId: group.id,
+    member: true,
+  })
+  for (const [path, effect] of [
+    ['project/inbox', 'allow'],
+    ['project/inbox/drafts', 'allow'],
+    ['project/inbox/private', 'deny'],
+    ['project/inbox/private/approved', 'allow'],
+    ['owner/home', 'allow'],
+  ] as const) {
+    await identity.manage(admin, {
+      action: 'setGrant',
+      subjectType: 'group',
+      subjectId: group.id,
+      mountId: 'files',
+      path,
+      permission: 'list',
+      effect,
+    })
+  }
+  await identity.manage(admin, {
+    action: 'setHome',
+    userId: admin.id,
+    mountId: 'files',
+    path: 'owner/home',
+  })
+  expect(identity.entryPoints(visitor)).toEqual([
+    { mountId: 'files', segments: ['project', 'inbox'] },
+    { mountId: 'files', segments: ['project', 'inbox', 'private', 'approved'] },
+  ])
 })

@@ -141,40 +141,78 @@ describe('interface interactions', () => {
     },
   )
 
-  test(
-    'preview navigation moves to the adjacent file in the current folder',
-    { session: 'owner' },
-    async ({ app, screen }) => {
-      await app.open(storage)
-      const folder = await createFolder(screen)
-      await screen.getByRole('link', folder, { exact: true }).tap()
-      await screen.getByRole('heading', folder, { level: 1 }).waitFor()
-      const files = [
-        {
-          name: '01-notes.txt',
-          mimeType: 'text/plain',
-          buffer: Buffer.from('First page.'),
-        },
-        {
-          name: '02-notes.txt',
-          mimeType: 'text/plain',
-          buffer: Buffer.from('Second page.'),
-        },
-      ]
-      await uploadFiles(screen, files)
-      await screen.getByRole('link', '01-notes.txt', { exact: true }).tap()
-      const gallery = screen.getByRole('navigation', 'Preview navigation')
-      await screen.getByText('First page.', { exact: true }).waitFor()
+  for (const width of [1280, 390]) {
+    test(
+      'the fullscreen gallery moves between readable images at ' + width + 'px',
+      { session: 'owner' },
+      async ({ app, browser, screen }) => {
+        await browser.setViewport({ width, height: width === 390 ? 844 : 800 })
+        await app.open(storage)
+        const folder = await createFolder(screen)
+        await screen.getByRole('link', folder, { exact: true }).tap()
+        await screen.getByRole('heading', folder, { level: 1 }).waitFor()
+        const png = Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ2YAAAAASUVORK5CYII=',
+          'base64',
+        )
+        await uploadFiles(screen, [
+          { name: '01-first.png', mimeType: 'image/png', buffer: png },
+          {
+            name: '02-notes.txt',
+            mimeType: 'text/plain',
+            buffer: Buffer.from('Field notes.'),
+          },
+          {
+            name: '03-invalid.png',
+            mimeType: 'application/octet-stream',
+            buffer: Buffer.from('Not image bytes'),
+          },
+          { name: '04-final.png', mimeType: 'image/png', buffer: png },
+        ])
+        await screen.getByRole('link', '02-notes.txt', { exact: true }).tap()
+        await screen.getByText('Field notes.', { exact: true }).waitFor()
+        const gallery = screen.getByRole('navigation', 'Image navigation')
+        const hiddenInDocument = !(await gallery.isVisible())
+        await screen.getByRole('button', 'Close Preview').tap()
+        await screen.getByRole('link', '01-first.png', { exact: true }).tap()
+        await gallery.getByRole('button', 'Fullscreen', { exact: true }).tap()
+        await gallery
+          .getByRole('button', 'Exit fullscreen', { exact: true })
+          .waitFor()
+        const active = await browser.evaluate(
+          () =>
+            document.fullscreenElement?.hasAttribute('data-gallery-surface') ===
+            true,
+        )
 
-      await gallery.getByRole('button', 'Next').tap()
+        if (width === 390)
+          await gallery.getByRole('button', 'Next', { exact: true }).tap()
+        else await browser.keyboard.press('ArrowRight')
+        await screen.getByRole('img', '04-final.png', { exact: true }).waitFor()
+        const atEnd = await gallery
+          .getByRole('button', 'Next', { exact: true })
+          .isDisabled()
+        await gallery.getByRole('button', 'Previous', { exact: true }).tap()
+        await screen.getByRole('img', '01-first.png', { exact: true }).waitFor()
+        await gallery
+          .getByRole('button', 'Exit fullscreen', { exact: true })
+          .tap()
+        await gallery
+          .getByRole('button', 'Fullscreen', { exact: true })
+          .waitFor()
 
-      await expect(screen.getByRole('heading', '02-notes.txt')).toBeVisible()
-      await expect(
-        screen.getByText('Second page.', { exact: true }),
-      ).toBeVisible()
-      await expect(gallery.getByRole('button', 'Next')).toBeDisabled()
-    },
-  )
+        expect(hiddenInDocument).toBe(true)
+        expect(active).toBe(true)
+        expect(atEnd).toBe(true)
+        expect(
+          await browser.evaluate(() => document.fullscreenElement === null),
+        ).toBe(true)
+        await expect(
+          gallery.getByRole('button', 'Previous', { exact: true }),
+        ).toBeDisabled()
+      },
+    )
+  }
   test(
     'dropping a file on a folder moves it after confirmation',
     { session: 'owner' },

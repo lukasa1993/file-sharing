@@ -16,12 +16,18 @@ import {
 import { adminUser, data, go, mustUser, ownerGuard, localNext } from './http.ts'
 import { inspectFile } from './inspection/index.ts'
 import { requestRef, resource, selected } from './metadata.ts'
-import { fileOperation } from './operations.ts'
+import { handleFileOperation } from './operations.ts'
 import type { Services } from './runtime.ts'
 import type { Access } from './identity/index.ts'
+import {
+  changeDirectoryPermission,
+  directoryPermissions,
+} from './identity/directory-permissions.ts'
+import { renderDirectoryPermissions } from './ui/directory-permissions.tsx'
 import type { UploadAccess } from './transfers/index.ts'
 import {
   renderLogin,
+  renderProviderRedirect,
   renderFiles,
   renderTrash,
   renderAdmin,
@@ -34,8 +40,11 @@ import { refUrl } from './ui/base.tsx'
 const routes = route({
   home: '/',
   login: '/login',
+  oidcStart: '/_/auth/oidc',
+  oidcCallback: '/_/auth/oidc/callback',
   logout: '/logout',
   files: '/_/files',
+  directoryPermissions: '/_/folder-permissions',
   shares: '/_/shares',
   trash: '/_/trash',
   admin: '/_/admin',
@@ -230,7 +239,15 @@ export async function appRouter(
       ? go('/')
       : renderLogin({
           csrf: access(ctx).csrf,
+          oidc: Boolean(s.config.oidc),
           next: localNext(ctx.url.searchParams.get('next')),
+          ...(ctx.url.searchParams.has('providerError')
+            ? {
+                providerError: true,
+                error:
+                  'Could not sign in with the identity provider. Try again or use your local account.',
+              }
+            : {}),
           brand: brand(),
         }),
   )
@@ -257,12 +274,53 @@ export async function appRouter(
       if (!(error instanceof AppError) || error.status !== 401) throw error
       const page = await renderLogin({
         csrf: access(ctx).csrf,
+        oidc: Boolean(s.config.oidc),
         error: error.message,
         next,
         brand: brand(),
       })
       return new Response(page.body, { status: 401, headers: page.headers })
     }
+  })
+  router.post(routes.oidcStart, async (ctx) => {
+    const fields = await data(ctx.request)
+    const next = localNext(fields.next)
+    try {
+      const result = await s.identity.startOidc(
+        ctx.request,
+        access(ctx),
+        next,
+        audit.get(ctx.request)?.peer,
+      )
+      const location = result.headers.get('Location')
+      if (!location) throw new AppError(503, 'Identity provider unavailable.')
+      return renderProviderRedirect(location, brand())
+    } catch (error) {
+      if (!(error instanceof AppError) || error.status !== 503) throw error
+      const page = await renderLogin({
+        csrf: access(ctx).csrf,
+        oidc: true,
+        providerError: true,
+        error: error.message,
+        next,
+        brand: brand(),
+      })
+      return new Response(page.body, { status: 503, headers: page.headers })
+    }
+  })
+  router.get(routes.oidcCallback, async (ctx) => {
+    if (!s.config.oidc) throw new AppError(404, 'Provider unavailable.')
+    let response: Response
+    try {
+      const loggedIn = await s.identity.finishOidc(ctx.request, access(ctx))
+      response = go(localNext(loggedIn.next))
+      response.headers.set('Set-Cookie', loggedIn.cookie)
+    } catch (error) {
+      if (!(error instanceof AppError) || error.status >= 500) throw error
+      response = go('/login?providerError=1')
+    }
+    response.headers.set('Referrer-Policy', 'no-referrer')
+    return response
   })
   router.post(routes.logout, async (ctx) => {
     const response = go('/login')
@@ -298,12 +356,33 @@ export async function appRouter(
     })
   })
   router.get(routes.files, async (ctx) => {
-    const model = shell(ctx),
-      guard = ownerGuard(s, model.user)
-    const fallback = s.identity.home(model.user) || {
-      mountId: model.mounts[0]?.id || '',
-      segments: [],
+    const workspace = shell(ctx)
+    const guard = ownerGuard(s, workspace.user)
+    const entryPoints: ResourceRef[] = []
+    for (const candidate of s.identity.entryPoints(workspace.user)) {
+      if (
+        !candidate.segments.length ||
+        !s.fs.isEnabled(candidate.mountId) ||
+        (workspace.home && toFiles(candidate) === toFiles(workspace.home))
+      )
+        continue
+      try {
+        if ((await s.fs.stat(candidate, guard)).kind === 'directory')
+          entryPoints.push(candidate)
+      } catch (error) {
+        if (
+          !(error instanceof AppError) ||
+          ![403, 404, 503].includes(error.status)
+        )
+          throw error
+      }
     }
+    const model = { ...workspace, entryPoints }
+    const firstMount = model.mounts[0]
+    const fallback = model.home ||
+      (firstMount
+        ? { mountId: firstMount.id, segments: [] }
+        : entryPoints[0]) || { mountId: '', segments: [] }
     const ref = ctx.url.searchParams.has('mount')
       ? requestRef(ctx.url)
       : fallback
@@ -330,7 +409,13 @@ export async function appRouter(
     try {
       let entries =
         scope === 'tree' && query
-          ? await s.fs.search(ref, query, guard)
+          ? await s.fs.search(
+              ref,
+              query,
+              guard,
+              model.user.id,
+              ctx.request.signal,
+            )
           : await s.fs.list(ref, guard)
       if (query && scope !== 'tree')
         entries = entries.filter((e) =>
@@ -383,36 +468,80 @@ export async function appRouter(
       await s.fs.list(requestRef(ctx.url), ownerGuard(s, current(ctx))),
     ),
   )
-  router.post(routes.operations, async (ctx) =>
-    fileOperation(
-      s.fs,
+  async function directoryContext(ctx: Endpoint) {
+    const model = shell(ctx)
+    const ref = requestRef(ctx.url)
+    const guard = ownerGuard(s, model.user)
+    guard('manage', ref)
+    const entry = await s.fs.stat(ref, guard, 'manage')
+    if (entry.kind !== 'directory') throw new AppError(400, 'Select a folder.')
+    return { model, ref }
+  }
+  router.get(routes.directoryPermissions, async (ctx) => {
+    const { model, ref } = await directoryContext(ctx)
+    return renderDirectoryPermissions(
+      model,
+      ref,
+      directoryPermissions(s.identity, model.user, ref),
+    )
+  })
+  router.post(routes.directoryPermissions, async (ctx) => {
+    const { model, ref } = await directoryContext(ctx)
+    changeDirectoryPermission(
+      s.identity,
+      model.user,
+      ref,
       await data(ctx.request),
-      ownerGuard(s, current(ctx)),
-      ctx.request.signal,
-    ),
-  )
+    )
+    return go(refUrl('/_/folder-permissions', ref))
+  })
+  router.post(routes.operations, async (ctx) => {
+    const user = current(ctx)
+    return handleFileOperation(
+      s.fs,
+      s.transfers,
+      await data(ctx.request),
+      ownerGuard(s, user),
+      user.id,
+      ctx.request,
+    )
+  })
   router.get(routes.trash, (ctx) =>
     renderTrash({
       ...shell(ctx),
       items: s.fs.trash(ownerGuard(s, current(ctx))),
     }),
   )
-  router.get(routes.shares, (ctx) =>
-    renderShares({ ...shell(ctx), shares: s.shares.list(current(ctx)) }),
-  )
-  router.get(routes.account, (ctx) =>
-    renderAccount({ ...shell(ctx), data: s.identity.userData(current(ctx)) }),
-  )
+  router.get(routes.shares, (ctx) => {
+    const model = shell(ctx)
+    return renderShares({
+      ...model,
+      shares: s.shares.list(model.user),
+      ...(model.user.admin
+        ? { owners: s.identity.listShareOwners(model.user) }
+        : {}),
+    })
+  })
+  function accountPage(ctx: Endpoint, issuedToken?: string) {
+    const user = current(ctx)
+    const quota = s.identity.quota(user.id)
+    const usage = s.transfers.quotaUsage(user.id)[0]
+    return renderAccount({
+      ...shell(ctx),
+      data: s.identity.userData(user),
+      quota,
+      used: usage?.used ?? 0,
+      reserved: usage?.reserved ?? 0,
+      bandwidth: s.identity.bandwidthBudget(user.id).rate(),
+      ...(issuedToken ? { issuedToken } : {}),
+    })
+  }
+  router.get(routes.account, (ctx) => accountPage(ctx))
   const updateAccount = async (ctx: Endpoint, native: boolean) => {
     const user = current(ctx)
     const result = await s.identity.self(user, await data(ctx.request))
     if (!native) return Response.json(result)
-    if (result.token)
-      return renderAccount({
-        ...shell(ctx),
-        data: s.identity.userData(user),
-        issuedToken: result.token,
-      })
+    if (result.token) return accountPage(ctx, result.token)
     return go('/_/account')
   }
   router.post(routes.account, (ctx) => updateAccount(ctx, true))
@@ -440,21 +569,30 @@ export async function appRouter(
   router.patch(routes.shareItem, shareOwner)
   router.delete(routes.shareItem, shareOwner)
   router.post(routes.unlock, (ctx) =>
-    s.shares.public(ctx.request, access(ctx), brand()),
+    s.shares.public(
+      ctx.request,
+      access(ctx),
+      brand(),
+      audit.get(ctx.request)?.peer,
+    ),
   )
+  const transferOptions = (user: User) => ({
+    actor: user.id,
+    bandwidthBudgets: [s.identity.bandwidthBudget(user.id)],
+  })
   const download = (ctx: Endpoint) =>
     s.transfers.download(
       ctx.request,
       requestRef(ctx.url),
       ownerGuard(s, current(ctx)),
-      { actor: current(ctx).id },
+      transferOptions(current(ctx)),
     )
   const preview = (ctx: Endpoint) =>
     s.transfers.preview(
       ctx.request,
       requestRef(ctx.url),
       ownerGuard(s, current(ctx)),
-      { actor: current(ctx).id },
+      transferOptions(current(ctx)),
     )
   router.get(routes.download, download)
   router.head(routes.download, download)
@@ -466,6 +604,7 @@ export async function appRouter(
       requestRef(ctx.url),
       ownerGuard(s, current(ctx)),
       s.fs,
+      s.transfers.contentPolicy.current,
     )
   router.get(routes.inspect, inspect)
   router.head(routes.inspect, inspect)
@@ -488,7 +627,7 @@ export async function appRouter(
       ctx.request,
       refs.length ? selected(refs) : [requestRef(ctx.url)],
       ownerGuard(s, current(ctx)),
-      { actor: current(ctx).id },
+      transferOptions(current(ctx)),
     )
   })
   async function uploads(ctx: Endpoint, id?: string) {
@@ -499,7 +638,7 @@ export async function appRouter(
     else {
       if (!user) throw new AppError(401, 'Sign in to upload')
       actor = {
-        actor: user.id,
+        ...transferOptions(user),
         guard: ownerGuard(s, user),
         getQuota: () => s.identity.quota(user.id),
       }
@@ -566,9 +705,11 @@ export async function appRouter(
         architecture: process.arch,
         limits: s.transfers.limits,
       },
+      contentLimits: s.transfers.contentPolicy.current,
       retentionDays: Number(s.meta.value('trashRetentionDays', '30')),
       data: {
         ...s.identity.adminData(user),
+        quotaUsage: s.transfers.quotaUsage(),
         mounts: states,
         transfers: s.transfers.active(),
         activity: s.meta.activity(),
@@ -652,6 +793,10 @@ export async function appRouter(
           s.meta.set('mount:' + id, fields.label.trim())
         break
       }
+      case 'setContentLimits':
+        s.transfers.contentPolicy.update(fields)
+        s.identity.audit(user.id, 'setContentLimits')
+        break
       case 'setSettings': {
         const days = Number(
           fields.trashRetentionDays ?? s.meta.value('trashRetentionDays', '30'),

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { describe, test, type Browser } from '@e2e-dev/web'
-import { expect, type TestFixtures } from 'e2e'
+import { expect, secrets, type TestFixtures } from 'e2e'
+import { createMember } from './helpers/member.ts'
 import { downloadFile, filePayload } from './helpers/transfer.ts'
 
 const root = '/_/files?mount=e2e'
@@ -192,6 +193,104 @@ describe('working across the file workspace', { session: 'owner' }, () => {
     await expect(
       screen.getByRole('heading', 'New collection', { level: 1 }),
     ).toBeVisible()
+  })
+
+  test('a member can start at their granted folders without opening a parent or sibling', async ({
+    app,
+    browser,
+    screen,
+  }) => {
+    const parent = await sampleFolder(app, browser, [
+      'Design review',
+      'Releases',
+      'Private drafts',
+    ])
+    await seedDirectories(
+      browser,
+      [parent, 'Design review'],
+      ['Delivered artwork'],
+    )
+    const username = 'project-' + randomUUID().slice(0, 8)
+    await app.open('/_/admin')
+    await createMember(screen, username)
+    const grantForm = screen.getByRole('form', 'Change a directory grant', {
+      exact: true,
+    })
+    await screen.getByText('Change a directory grant', { exact: true }).tap()
+    const principal = grantForm.getByLabel('Principal')
+    await principal.selectOption({ label: username + ' (user)' })
+    const userId = (await principal.inputValue()).slice('user:'.length)
+    await browser.evaluate(
+      async ({ userId, parent }) => {
+        const csrf = document.querySelector<HTMLMetaElement>(
+          'meta[name=csrf-token]',
+        )?.content
+        if (!csrf) throw new Error('Missing administrator form.')
+        for (const folder of ['Design review', 'Releases']) {
+          const response = await fetch('/_/api/v1/admin', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': csrf,
+            },
+            body: JSON.stringify({
+              action: 'setGrant',
+              subjectType: 'user',
+              subjectId: userId,
+              mountId: 'e2e',
+              path: parent + '/' + folder,
+              permission: 'list',
+              effect: 'allow',
+            }),
+          })
+          if (!response.ok)
+            throw new Error('Could not grant access: HTTP ' + response.status)
+        }
+        return true
+      },
+      { userId, parent },
+    )
+    await browser.clearCookies()
+    await app.open('/login')
+    await screen.getByLabel('Username').fill(username)
+    await screen
+      .getByLabel('Password', { exact: true })
+      .fill(secrets.get('memberPassword'))
+    await screen.getByRole('button', 'Sign in', { exact: true }).tap()
+    const storage = screen.getByRole('navigation', 'Storage')
+    await storage.getByRole('link', 'Design review', { exact: true }).tap()
+    await screen
+      .getByRole('link', 'Delivered artwork', { exact: true })
+      .waitFor()
+    const forbidden = await browser.evaluate(
+      async (parent) =>
+        Promise.all(
+          ['', parent, parent + '/Private drafts'].map(
+            async (path) =>
+              (
+                await fetch(
+                  '/_/files?' + new URLSearchParams({ mount: 'e2e', path }),
+                )
+              ).status,
+          ),
+        ),
+      parent,
+    )
+
+    await storage.getByRole('link', 'Releases', { exact: true }).tap()
+
+    await expect(
+      screen.getByRole('heading', 'Releases', { level: 1 }),
+    ).toBeVisible()
+    await expect(
+      screen.getByRole('link', 'Private drafts', { exact: true }),
+    ).toHaveCount(0)
+    await expect(
+      screen
+        .getByRole('navigation', 'Breadcrumb')
+        .getByRole('link', parent, { exact: true }),
+    ).toHaveCount(0)
+    expect(forbidden).toEqual([403, 403, 403])
   })
 
   test('file details identify the selected entry and the size of its original bytes', async ({

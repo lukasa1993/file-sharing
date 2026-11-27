@@ -6,6 +6,7 @@
     "@e2e-dev/core": "0.25.0",
     "@e2e-dev/web": "0.17.0",
     "@effect/language-service": "0.87.5",
+    "@stryker-mutator/api": "10.1.1",
     "@stryker-mutator/core": "10.1.1",
     "@types/bun": "1.4.5",
     "ai": "7.0.183",
@@ -40,6 +41,8 @@
     "release:check": "bun scripts/quality.ts release",
     "ops": "bun scripts/ops.ts",
     "test:e2e:fixture": "bun scripts/e2e.ts",
+    "test:e2e:packaged": "bun scripts/e2e.ts --packaged",
+    "test:container:tls": "bun scripts/container-https.ts",
     "effect:editor": "bun scripts/effect-editor-check.ts"
   },
   "dependencies": {

@@ -1,12 +1,16 @@
 import { AppError, type Guard, type ResourceRef } from './contracts.ts'
 import { resource, selected } from './metadata.ts'
-import type { Filesystem } from './filesystem/index.ts'
+import type { CopyProgress, Filesystem } from './filesystem/index.ts'
+import type { Transfers } from './transfers/index.ts'
+
+type Progress = (event: CopyProgress & { item: number; items: number }) => void
 type Operation = 'copy' | 'move' | 'rename' | 'delete' | 'trash'
 export async function fileOperation(
   fs: Filesystem,
   fields: Record<string, unknown>,
   guard: Guard,
   signal?: AbortSignal,
+  progress?: Progress,
 ) {
   const { operation, conflict = 'reject' } = fields
   if (
@@ -106,7 +110,22 @@ export async function fileOperation(
           mountId: ref.mountId,
           segments: [...ref.segments.slice(0, -1), name],
         })
-      const changed = await fs.operate(op, ref, dest, guard, conflict, signal)
+      const changed = await fs.operate(
+        op,
+        ref,
+        dest,
+        guard,
+        conflict,
+        signal,
+        progress
+          ? (event) =>
+              progress({
+                ...event,
+                item: results.length + 1,
+                items: refs.length,
+              })
+          : undefined,
+      )
       results.push({ ref, ok: true, result: changed })
     } catch (error) {
       if (!(error instanceof AppError)) throw error
@@ -144,4 +163,102 @@ function batchResponse(
     },
     { status: failed.length ? 207 : 200 },
   )
+}
+
+export function handleFileOperation(
+  fs: Filesystem,
+  transfers: Transfers,
+  fields: Record<string, unknown>,
+  guard: Guard,
+  actor: string,
+  request: Request,
+) {
+  if (fields.operation === 'cancel') {
+    if (
+      typeof fields.id !== 'string' ||
+      !transfers.cancelFileOperation(fields.id, actor)
+    )
+      throw new AppError(404, 'File operation is no longer active')
+    return new Response(null, { status: 204 })
+  }
+  if (
+    fields.progress !== true ||
+    (fields.operation !== 'copy' && fields.operation !== 'move')
+  )
+    return fileOperation(fs, fields, guard, request.signal)
+  const job = transfers.beginFileOperation(fields.operation, actor, request)
+  const encoder = new TextEncoder()
+  let detached = false
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      function send(value: unknown) {
+        if (!detached)
+          controller.enqueue(encoder.encode(JSON.stringify(value) + '\n'))
+      }
+      send({ type: 'started', id: job.id })
+      let last = -Infinity,
+        counted: ResourceRef | undefined,
+        offset = 0
+      async function work() {
+        try {
+          const response = await fileOperation(
+            fs,
+            fields,
+            guard,
+            job.signal,
+            (event) => {
+              if (event.phase === 'copying') {
+                if (counted !== event.ref) {
+                  counted = event.ref
+                  offset = 0
+                }
+                job.bytes += event.bytes - offset
+                offset = event.bytes
+              }
+              const now = performance.now()
+              // Drop intermediate snapshots when a reader is slow. Only the terminal
+              // result is mandatory, and it is bounded by the selection limit.
+              if ((controller.desiredSize ?? 0) > 0 && now - last >= 120) {
+                send({ type: 'progress', ...event })
+                last = now
+              }
+            },
+          )
+          const result = await response.json()
+          send({ type: 'result', status: response.status, result })
+        } catch (error) {
+          send({
+            type: 'result',
+            status: error instanceof AppError ? error.status : 500,
+            result: {
+              error: {
+                message:
+                  error instanceof AppError
+                    ? error.message
+                    : 'The file operation failed',
+              },
+            },
+          })
+        } finally {
+          job.remove()
+          if (!detached) controller.close()
+        }
+      }
+      work().catch((error) => {
+        if (!detached) controller.error(error)
+      })
+    },
+    cancel() {
+      detached = true
+      job.aborter.abort()
+      return job.finished.promise
+    },
+  })
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  })
 }

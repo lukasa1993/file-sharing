@@ -22,8 +22,9 @@ export function renderMarkdown(source: string) {
       list: (text, meta) => wrap(meta.ordered ? 'ol' : 'ul')(text),
       listItem: wrap('li'),
       hr: () => '<hr>',
-      code: (text) => '<pre><code>' + esc(text) + '</code></pre>',
-      codespan: (text) => '<code>' + esc(text) + '</code>',
+      // Bun passes the escaped output of the text renderer into these wrappers.
+      code: (children) => '<pre><code>' + children + '</code></pre>',
+      codespan: wrap('code'),
       table: wrap('table'),
       thead: wrap('thead'),
       tbody: wrap('tbody'),

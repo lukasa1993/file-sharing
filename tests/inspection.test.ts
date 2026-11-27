@@ -7,7 +7,12 @@ import { AppError, type Guard } from '../app/contracts.ts'
 import { Filesystem } from '../app/filesystem/index.ts'
 import { marker } from '../app/filesystem/resolver.ts'
 import { inspectFile } from '../app/inspection/index.ts'
-import { renderMarkdown, renderSource } from '../app/inspection/render.ts'
+import {
+  inspectionDocument,
+  renderItems,
+  renderMarkdown,
+  renderSource,
+} from '../app/inspection/render.ts'
 import { listTarHeaders, UnsupportedInspection } from '../app/inspection/tar.ts'
 
 let mount: string
@@ -149,6 +154,29 @@ test('rejects damaged headers, invalid terminators and unsupported TAR members',
 })
 
 describe('formatted document inspection', () => {
+  test('preserves code punctuation and Markdown structures in ordinary documents', () => {
+    const html = renderMarkdown(
+      [
+        '###### Topic',
+        'Use *emphasis*, ~~old~~ and `x < y & z`.',
+        '> Quote',
+        '1. First\n2. Second',
+        '- A\n- B',
+        '---',
+        '| Name | Size |\n| ---- | ---- |\n| A | 5 |',
+        '~~~text\n<n> &amp;\n~~~',
+      ].join('\n\n'),
+    )
+    expect(html).toBe(
+      [
+        '<h6>Topic</h6><p>Use <em>emphasis</em>, <s>old</s> and <code>x &lt; y &amp; z</code>.</p>',
+        '<blockquote><p>Quote</p></blockquote><ol><li>First</li><li>Second</li></ol>',
+        '<ul><li>A</li><li>B</li></ul><hr>',
+        '<table><thead><tr><th>Name</th><th>Size</th></tr></thead><tbody><tr><td>A</td><td>5</td></tr></tbody></table>',
+        '<pre><code>&lt;n&gt; &amp;amp;\n</code></pre>',
+      ].join(''),
+    )
+  })
   test('renders allowed Markdown structure with inert links and image descriptions', () => {
     const html = renderMarkdown(
       '# Notes\n\nRead **carefully**. [Reference](https://example.invalid/manual)\n\n![Map](https://example.invalid/map.png)\n\n<aside data-example="1">literal HTML</aside>',
@@ -199,6 +227,55 @@ describe('formatted document inspection', () => {
     expect(html).toContain('&lt;aside&gt;')
     expect(html).toContain('<i>// note</i>')
     expect(renderSource(src, false)).not.toContain('<b>')
+  })
+  test('distinguishes identifiers, numbers, strings and comments and preserves their boundaries', () => {
+    const lines = [
+      "if (item2 == 12.50) return 'a\\'b'; // end",
+      '# count 40',
+      'const value = "quoted";',
+      "let unfinished = 'open",
+    ]
+    expect(renderSource(lines.join('\n'), true)).toBe(
+      '<pre><code>' +
+        [
+          '<b>if</b> (item2 == <mark>12.50</mark>) <b>return</b> <em>&#x27;a\\&#x27;b&#x27;</em>; <i>// end</i>',
+          '<i># count 40</i>',
+          '<b>const</b> value = <em>&quot;quoted&quot;</em>;',
+          '<b>let</b> unfinished = <em>&#x27;open</em>',
+        ].join('\n') +
+        '</code></pre>',
+    )
+    expect(renderSource('item42 < 3', false)).toBe(
+      '<pre><code>item42 &lt; 3</code></pre>',
+    )
+  })
+  test('labels empty and one-member archives and shows a usable original download', () => {
+    const empty = renderItems([])
+    expect(empty).toContain('<caption>0 archive entries</caption>')
+    expect(empty).toContain('<th scope="col">Bytes</th>')
+    const single = renderItems([
+      { name: 'Notes & drafts', kind: 'file', size: 0 },
+    ])
+    expect(single).toContain('<caption>1 archive entry</caption>')
+    expect(single).toContain(
+      '<tr><td>Notes &amp; drafts</td><td>File</td><td>0</td></tr>',
+    )
+    const doc = inspectionDocument(
+      'Notes & drafts',
+      single,
+      '/original',
+      'First page only',
+    )
+    expect(doc).toContain('<title>Notes &amp; drafts</title>')
+    expect(doc).toContain(
+      '<h1>Notes &amp; drafts</h1><a href="/original" download>Download original</a>',
+    )
+    expect(doc).toContain(
+      '<p>First page only</p><article>' + single + '</article>',
+    )
+    expect(inspectionDocument('Empty', empty, '/empty')).toContain(
+      'Download original</a><article>',
+    )
   })
   test('returns a sandboxed private preview and releases scoped handles after GET and HEAD', async () => {
     await writeFile(join(mount, 'notes.md'), '# Field notes')

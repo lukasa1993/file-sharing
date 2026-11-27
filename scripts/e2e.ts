@@ -1,11 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { copyFile, mkdtemp, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { initialize } from './ops'
+import { addCopyStorage } from '../tests/fixtures/copy-storage.ts'
+import { configureFixtureIssuer } from '../tests/fixtures/oidc.ts'
+import { buildDistribution } from './build.ts'
 import type { Subprocess } from 'bun'
 
 async function availablePort() {
@@ -62,7 +65,14 @@ async function shutDown(child?: Subprocess) {
 
 const temp = await mkdtemp(join(tmpdir(), 'fileserver-e2e-'))
 const state = join(temp, 'state')
+const args = Bun.argv.slice(2)
+const packaged = args.includes('--packaged')
+const externalIdentity = !args.includes('--local-auth-only')
+const runnerArgs = args.filter(
+  (arg) => arg !== '--packaged' && arg !== '--local-auth-only',
+)
 const abort = new AbortController()
+let idp: Awaited<ReturnType<typeof configureFixtureIssuer>> | undefined
 let server: Subprocess | undefined
 let runner: Subprocess | undefined
 function interrupt() {
@@ -76,6 +86,7 @@ try {
   const username = 'e2e-owner'
   const password = randomBytes(32).toString('base64url')
   await initialize(state, username, { password, mountId: 'e2e' })
+  await addCopyStorage(state, true)
   await copyFile(
     new URL('../tests/fixtures/handoff.txt', import.meta.url),
     join(state, 'storage', 'handoff.txt'),
@@ -84,13 +95,21 @@ try {
   const port = await availablePort()
   const origin = `http://127.0.0.1:${port}`
   const config = join(state, 'config')
-  server = Bun.spawn([process.execPath, 'run', 'server.ts'], {
-    cwd: root,
+  if (externalIdentity)
+    idp = await configureFixtureIssuer(config, origin, username)
+  if (packaged) {
+    await buildDistribution(join(temp, 'dist'))
+    // Only shipped server and browser assets are available from this directory.
+    await symlink(join(root, 'node_modules'), join(temp, 'node_modules'), 'dir')
+  }
+  const entry = packaged ? 'dist/app/server.js' : 'server.ts'
+  server = Bun.spawn([process.execPath, 'run', entry], {
+    cwd: packaged ? temp : root,
     stdout: 'inherit',
     stderr: 'inherit',
     env: {
       PATH: process.env.PATH,
-      NODE_ENV: 'test',
+      NODE_ENV: packaged ? 'production' : 'test',
       PUBLIC_ORIGIN: origin,
       PORT: String(port),
       HOST: '127.0.0.1',
@@ -110,7 +129,7 @@ try {
     .filter(Boolean)
     .join(',')
   runner = Bun.spawn(
-    ['node', 'node_modules/e2e/dist/cli/bin.js', 'run', ...Bun.argv.slice(2)],
+    ['node', 'node_modules/e2e/dist/cli/bin.js', 'run', ...runnerArgs],
     {
       cwd: root,
       stdout: 'inherit',
@@ -119,6 +138,7 @@ try {
       env: {
         ...process.env,
         APP_URL: origin,
+        E2E_FIXTURE_OIDC: externalIdentity ? '1' : '0',
         E2E_USER_OWNER_USERNAME: username,
         E2E_USER_OWNER_PASSWORD: password,
         E2E_SECRET_SHARE_PASSWORD: randomBytes(32).toString('base64url'),
@@ -139,6 +159,7 @@ try {
 } finally {
   await shutDown(runner)
   await shutDown(server)
+  await idp?.close()
   await rm(temp, { recursive: true, force: true })
   process.off('SIGINT', interrupt)
   process.off('SIGTERM', interrupt)

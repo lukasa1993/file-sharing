@@ -57,12 +57,16 @@ export async function data(request: Request): Promise<Record<string, unknown>> {
 }
 // Parse small control bodies once before any middleware clones the request.
 // Raw transfer chunks have independent streaming and byte limits.
-export async function boundedRequest(request: Request): Promise<Request> {
+export async function boundedRequest(
+  request: Request,
+  textEditLimit: number,
+): Promise<Request> {
   if (!request.body) return request
   const path = new URL(request.url).pathname
   if (request.method === 'PATCH' && /^\/_\/uploads\/[a-zA-Z0-9-]+$/.test(path))
     return request
-  const max = request.method === 'PUT' && path === '/_/preview' ? 262144 : 65536
+  const max =
+    request.method === 'PUT' && path === '/_/preview' ? textEditLimit : 65536
   if (Number(request.headers.get('content-length') || 0) > max)
     throw new AppError(413, 'Request too large')
   const chunks: Uint8Array[] = []

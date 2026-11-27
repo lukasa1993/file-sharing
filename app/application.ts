@@ -14,7 +14,7 @@ function operationLabel(pathname: string) {
   if (publicRoutes.has(pathname)) return pathname
   if (!pathname.startsWith('/_/')) return 'public'
   return (
-    /^\/_\/(api|files|shares|account|admin|trash|preview|inspect|download|archive|uploads|events)(?=\/|$)/.exec(
+    /^\/_\/(api|files|folder-permissions|shares|account|admin|trash|preview|inspect|download|archive|uploads|events)(?=\/|$)/.exec(
       pathname,
     )?.[0] ?? 'internal'
   )
@@ -50,7 +50,10 @@ export async function createApp(config: AppConfig) {
         throw new AppError(421, 'Unknown host')
       const remote = clientPeer(peer, incoming)
       if (remote) record.peer = remote
-      const request = await boundedRequest(incoming)
+      const request = await boundedRequest(
+        incoming,
+        services.transfers.contentPolicy.current.textPreviewKiB * 1024,
+      )
       auditContext.set(request, record)
       const result = await runtime.runPromiseExit(
         attempt(() => router.fetch(request)).pipe(

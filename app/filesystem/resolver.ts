@@ -112,17 +112,24 @@ export function safeStat(s: BigIntStats, allowLinked = false): void {
 export function version(s: BigIntStats): string {
   return [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs, s.birthtimeNs].join(':')
 }
-export function pinMatches(stored: string, meta: BigIntStats): boolean {
-  const actual = version(meta)
-  const fields = stored.split(':')
-  if (fields.length === 5)
-    return actual.split(':').slice(0, 5).join(':') === stored
-  if (!meta.isDirectory() || meta.birthtimeNs <= 0n) return actual === stored
+export function pinMatchesVersion(
+  stored: string,
+  actual: string,
+  directory: boolean,
+) {
+  const pin = stored.split(':')
+  const here = actual.split(':')
+  if (pin.length === 5) return here.slice(0, 5).join(':') === stored
+  if (!directory || !here[5] || here[5] === '0') return actual === stored
   return (
-    fields.length === 6 &&
-    identity(meta) === fields.slice(0, 2).join(':') &&
-    fields[5] === String(meta.birthtimeNs)
+    pin.length === 6 &&
+    pin[0] === here[0] &&
+    pin[1] === here[1] &&
+    pin[5] === here[5]
   )
+}
+export function pinMatches(stored: string, meta: BigIntStats): boolean {
+  return pinMatchesVersion(stored, version(meta), meta.isDirectory())
 }
 export function asEntry(
   ref: ResourceRef,

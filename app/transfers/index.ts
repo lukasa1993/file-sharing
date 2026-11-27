@@ -13,7 +13,8 @@ import {
   type TransferOptions,
   type PreparationTimeouts,
 } from './streams.ts'
-import { TEXT_LIMIT, textExtensions } from './preview.ts'
+import { textExtensions } from './preview.ts'
+import { ContentPolicy } from './content-limits.ts'
 
 export type { DownloadOptions, UploadAccess, TransferOptions }
 
@@ -28,6 +29,7 @@ export class Transfers {
     private readonly fs: Filesystem,
     options: TransferOptions = {},
     clock: Clock.Clock = Clock.Clock.defaultValue(),
+    readonly contentPolicy: ContentPolicy = new ContentPolicy(),
   ) {
     for (const [name, value] of Object.entries(options)) {
       if (
@@ -38,7 +40,7 @@ export class Transfers {
     }
     this.limits = Object.freeze({ ...defaultTransferLimits, ...options })
     this.jobs = new ActivityRegistry(this.limits, clock)
-    this.downloads = new Downloads(fs, this.jobs, this.timeouts)
+    this.downloads = new Downloads(fs, this.jobs, this.timeouts, contentPolicy)
     this.uploads = new Uploads(
       db,
       fs,
@@ -46,6 +48,7 @@ export class Transfers {
       this.limits,
       clock,
       this.timeouts,
+      contentPolicy,
     )
   }
 
@@ -98,6 +101,16 @@ export class Transfers {
     return runTask(this.uploadTask(req, access, id))
   }
 
+  beginFileOperation(kind: 'copy' | 'move', actor: string, request: Request) {
+    return this.jobs.start(kind, actor, null, request)
+  }
+  cancelFileOperation(id: string, actor: string) {
+    return this.jobs.cancel(id, actor)
+  }
+  quotaUsage(actor?: string) {
+    return this.uploads.quotaUsage(actor)
+  }
+
   active() {
     return this.jobs.list()
   }
@@ -128,7 +141,8 @@ export class Transfers {
         412,
         'This document changed. Reopen it before editing.',
       )
-    if (current.size > TEXT_LIMIT)
+    const textLimit = this.contentPolicy.current.textPreviewKiB * 1024
+    if (current.size > textLimit)
       throw new AppError(413, 'Open this document in a local editor.')
     const id = randomUUID()
     // Staging an edit reuses the upload publisher, but an editor needs only
@@ -159,7 +173,7 @@ export class Transfers {
               const item = await reader.read()
               if (item.done) break
               length += item.value.byteLength
-              if (length > TEXT_LIMIT)
+              if (length > textLimit)
                 throw new AppError(413, 'The document exceeds the text limit.')
               chunks.push(item.value)
             }

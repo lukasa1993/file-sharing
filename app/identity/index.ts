@@ -6,6 +6,8 @@ import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import {
   completeAuth,
+  startExternalAuth,
+  finishExternalAuth,
   createCredentialsAuthProvider,
   verifyCredentials,
 } from 'remix/auth'
@@ -24,7 +26,9 @@ import {
   type User,
 } from '../contracts.ts'
 import { absoluteAge, digest, SqliteSessions } from './session.ts'
+import { OidcProvider } from './oidc.ts'
 import { initializeIdentitySchema } from './schema.ts'
+import { permittedByDirectoryGrant } from './directory-permissions.ts'
 
 export interface Access {
   user: User | null
@@ -235,6 +239,8 @@ export class Identity {
     counts: new Map<string, number>(),
   })
   private readonly hashSlots = Semaphore.makeUnsafe(3)
+  private readonly oidc: OidcProvider | undefined
+  private readonly bandwidthLimits = new Map<string, number>()
   private dummy = ''
   private readonly sessionScheme = createSessionAuthScheme<User, string>({
     read: (session) => {
@@ -252,6 +258,9 @@ export class Identity {
     readonly config: AppConfig,
     private clock: Clock.Clock = Clock.Clock.defaultValue(),
   ) {
+    this.oidc = config.oidc
+      ? new OidcProvider(config.oidc, config.publicOrigin, clock)
+      : undefined
     this.storage = new SqliteSessions(db, clock)
     this.cookie = createCookie('fs_session', {
       secrets: [config.sessionSecret],
@@ -265,6 +274,13 @@ export class Identity {
 
   async init() {
     initializeIdentitySchema(this.db)
+    this.bandwidthLimits.clear()
+    for (const row of this.db
+      .query<{ userId: string; rate: number }, []>(
+        'SELECT userId,rate FROM auth_user_bandwidth',
+      )
+      .all())
+      this.bandwidthLimits.set(row.userId, row.rate)
     this.dummy = await Bun.password.hash(
       randomBytes(32).toString('hex'),
       hashOptions,
@@ -301,6 +317,10 @@ export class Identity {
     return row
       ? { id: row.id, username: row.username, admin: Boolean(row.admin) }
       : null
+  }
+
+  bandwidthBudget(id: string) {
+    return { key: id, rate: () => this.bandwidthLimits.get(id) ?? 0 }
   }
 
   quota(id: string) {
@@ -351,6 +371,64 @@ export class Identity {
     return row ? { mountId: row.mountId, segments: row.path.split('/') } : null
   }
 
+  entryPoints(user: User): ResourceRef[] {
+    if (!this.liveUser(user, 'list')) return []
+    const candidates: ResourceRef[] = this.config.mounts.map((mount) => ({
+      mountId: mount.id,
+      segments: [],
+    }))
+    const home = this.home(user)
+    if (home) candidates.push(home)
+    const grants = this.db
+      .query<{ mountId: string; path: string }, [string, string]>(
+        `
+      SELECT distinct mountId,path FROM (
+        SELECT mountId,path,permission,subjectType,subjectId FROM auth_grants WHERE effect='allow'
+        UNION ALL
+        SELECT mountId,path,permission,subjectType,subjectId FROM auth_directory_grants
+      )
+      WHERE permission='list' AND ((subjectType='user' AND subjectId=?) OR
+        (subjectType='group' AND subjectId IN (SELECT groupId FROM auth_members WHERE userId=?)))
+      ORDER BY mountId,path`,
+      )
+      .all(user.id, user.id)
+    for (const grant of grants)
+      candidates.push({
+        mountId: grant.mountId,
+        segments: grant.path ? grant.path.split('/') : [],
+      })
+    candidates.sort(
+      (left, right) => left.segments.length - right.segments.length,
+    )
+    const anchors = new Map<string, ResourceRef>()
+    const access = new Map<string, boolean>()
+    for (const candidate of candidates) {
+      let segments = candidate.segments
+      for (;;) {
+        const key = JSON.stringify([candidate.mountId, ...segments])
+        if (anchors.has(key)) break
+        let visible = access.get(key)
+        if (visible === undefined) {
+          visible = this.allowed(user, 'list', {
+            mountId: candidate.mountId,
+            segments,
+          })
+          access.set(key, visible)
+        }
+        if (!visible || !segments.length) {
+          if (visible || segments.length < candidate.segments.length)
+            anchors.set(
+              JSON.stringify([candidate.mountId, ...candidate.segments]),
+              candidate,
+            )
+          break
+        }
+        segments = segments.slice(0, -1)
+      }
+    }
+    return [...anchors.values()]
+  }
+
   allowedEffect(user: User, action: Action, ref: ResourceRef) {
     return Effect.try({
       try: () => this.evaluatePermission(user, action, ref),
@@ -367,6 +445,28 @@ export class Identity {
     action: Action,
     ref: ResourceRef,
   ): boolean {
+    const primary = this.primaryPermission(user, action, ref)
+    if (primary !== null) return primary
+    return (
+      action !== 'manage' && permittedByDirectoryGrant(this, user, action, ref)
+    )
+  }
+
+  canDelegate(user: User, action: Action, ref: ResourceRef) {
+    return (
+      action !== 'manage' &&
+      this.primaryPermission(user, 'manage', ref) === true &&
+      this.primaryPermission(user, action, ref) === true
+    )
+  }
+
+  // Null means there is no effective administrator policy for this action.
+  // Only that case can a folder manager supplement with a grant.
+  private primaryPermission(
+    user: User,
+    action: Action,
+    ref: ResourceRef,
+  ): boolean | null {
     if (
       !user ||
       !this.config.mounts.some((m) => m.id === ref.mountId) ||
@@ -401,7 +501,8 @@ export class Identity {
     `,
       )
       .get(ref.mountId, action, path, path, home?.path ?? '', user.id, user.id)
-    return rule ? rule.effect === 'allow' : ownHome && action !== 'manage'
+    if (rule) return rule.effect === 'allow'
+    return ownHome && action !== 'manage' ? true : null
   }
 
   async context(request: Request, createAnonymous = false): Promise<Access> {
@@ -567,15 +668,110 @@ export class Identity {
       this.audit(null, 'login.failed')
       throw new AppError(401, 'Invalid username or password.')
     }
+    return this.authCookie(ctx, account.id)
+  }
+
+  private async authCookie(ctx: RequestContext, accountId: string) {
+    const request = ctx.request
     const session = completeAuth(ctx)
-    session.set('userId', account.id)
+    session.set('userId', accountId)
     session.set('device', deviceLabel(request.headers.get('User-Agent')))
     session.unset('_csrf')
     getCsrfToken(ctx)
     const value = await this.storage.save(session)
     if (!value) throw forbidden()
-    this.audit(account.id, 'login.success')
+    this.audit(accountId, 'login.success')
     return this.cookie.serialize(value, { maxAge: absoluteAge / 1000 })
+  }
+
+  async startOidc(
+    request: Request,
+    access: Access,
+    next: string,
+    peer?: string,
+  ) {
+    if (!this.oidc) throw new AppError(404, 'Provider unavailable.')
+    const ctx = this.requestContexts.get(access)
+    if (
+      !ctx ||
+      ctx.request !== request ||
+      access.user ||
+      !access.sessionId ||
+      !this.sessionActive(access.sessionId)
+    )
+      throw forbidden()
+    this.consumePasswordAttempt('oidc-start:' + access.sessionId, peer)
+    const nonce = randomBytes(32).toString('base64url')
+    const session = ctx.get(Session)
+    if (!session) throw forbidden()
+    try {
+      const provider = await this.oidc.provider(nonce, request.signal)
+      const result = await startExternalAuth(provider, ctx, { returnTo: next })
+      session.set('oidcNonce', nonce)
+      session.set('oidcExpires', this.clock.currentTimeMillisUnsafe() + 600_000)
+      await this.storage.save(session)
+      return result
+    } catch {
+      throw new AppError(
+        503,
+        'Identity provider is unavailable. Sign in with your local account.',
+      )
+    }
+  }
+
+  async finishOidc(request: Request, access: Access) {
+    if (!this.oidc || !this.config.oidc)
+      throw new AppError(404, 'Provider unavailable.')
+    const ctx = this.requestContexts.get(access)
+    if (
+      !ctx ||
+      ctx.request !== request ||
+      access.user ||
+      !access.sessionId ||
+      !this.sessionActive(access.sessionId)
+    )
+      throw forbidden()
+    const session = ctx.get(Session)
+    if (!session) throw forbidden()
+    const nonce = session.get('oidcNonce'),
+      expires = session.get('oidcExpires'),
+      transaction = session.get('__auth')
+    if (
+      typeof nonce !== 'string' ||
+      typeof expires !== 'number' ||
+      !transaction ||
+      typeof transaction !== 'object' ||
+      !('state' in transaction) ||
+      typeof transaction.state !== 'string' ||
+      transaction.state !== ctx.url.searchParams.get('state')
+    )
+      throw forbidden()
+    // Consume the durable transaction before contacting the issuer. A racing callback cannot revive it.
+    for (const field of ['oidcNonce', 'oidcExpires', '__auth'])
+      session.unset(field)
+    await this.storage.save(session)
+    try {
+      if (expires <= this.clock.currentTimeMillisUnsafe()) throw forbidden()
+      const provider = await this.oidc.provider(nonce, request.signal)
+      session.set('__auth', transaction)
+      const verified = await finishExternalAuth(provider, ctx)
+      const mapping = this.config.oidc.accounts.find(
+        (item) => item.subject === verified.result.profile.sub,
+      )
+      const local =
+        mapping &&
+        this.db
+          .query<{ id: string }, [string]>(
+            'SELECT id FROM auth_users WHERE username=? AND enabled=1',
+          )
+          .get(mapping.username)
+      if (!local) throw forbidden()
+      const cookie = await this.authCookie(ctx, local.id)
+      return { cookie, next: verified.returnTo }
+    } catch {
+      this.audit(null, 'oidc.failed')
+      throw forbidden()
+    }
   }
 
   async logout(access: Access) {
@@ -610,13 +806,21 @@ export class Identity {
       throw forbidden()
   }
 
+  listShareOwners(actor: User): { id: string; username: string }[] {
+    this.requireLive(actor, true)
+    return this.db
+      .query<{ id: string; username: string }, []>(
+        'SELECT id,username FROM auth_users WHERE enabled=1 ORDER BY username',
+      )
+      .all()
+  }
   adminData(actor: User) {
     this.requireLive(actor, true)
     this.storage.sweep()
     return {
       users: this.db
         .query(
-          'SELECT id,username,admin,enabled,quota FROM auth_users ORDER BY username',
+          'SELECT u.id,u.username,u.admin,u.enabled,u.quota,b.rate AS bandwidth FROM auth_users u LEFT JOIN auth_user_bandwidth b ON b.userId=u.id ORDER BY u.username',
         )
         .all(),
       groups: this.db
@@ -659,6 +863,11 @@ export class Identity {
     this.requireLive(user)
     this.storage.sweep()
     return {
+      groups: this.db
+        .query(
+          'SELECT g.id,g.name FROM auth_groups g JOIN auth_members m ON m.groupId=g.id WHERE m.userId=? ORDER BY g.name',
+        )
+        .all(user.id),
       sessions: this.db
         .query(
           `SELECT ${sessionFields} FROM auth_sessions WHERE userId=? ORDER BY lastSeen DESC`,
@@ -880,6 +1089,35 @@ export class Identity {
             this.revokeUserSessions(id)
             break
           }
+          case 'setBandwidth': {
+            const { id } = this.findAccount(fields)
+            const input = fields.bytesPerSecond
+            if (
+              input === '' ||
+              input === null ||
+              input === 0 ||
+              input === '0'
+            ) {
+              this.db
+                .query('DELETE FROM auth_user_bandwidth WHERE userId=?')
+                .run(id)
+            } else {
+              if (
+                (typeof input !== 'number' && typeof input !== 'string') ||
+                !/^[1-9]\d*$/.test(String(input)) ||
+                !Number.isSafeInteger(Number(input))
+              )
+                throw bad(
+                  'Enter a positive whole number of bytes per second, or leave it blank for unlimited.',
+                )
+              this.db
+                .query(
+                  'INSERT INTO auth_user_bandwidth(userId,rate) VALUES(?,?) ON CONFLICT(userId) DO UPDATE SET rate=excluded.rate',
+                )
+                .run(id, Number(input))
+            }
+            break
+          }
           case 'setQuota': {
             const { id } = this.findAccount(fields)
             const rawBytes = fields.bytes
@@ -940,6 +1178,12 @@ export class Identity {
         this.audit(actor.id, action)
       })
       .immediate()
+    if (action === 'setBandwidth') {
+      const userId = text(fields, 'userId')
+      const rate = Number(fields.bytesPerSecond)
+      if (rate) this.bandwidthLimits.set(userId, rate)
+      else this.bandwidthLimits.delete(userId)
+    }
   }
 
   async self(user: User, fields: Fields): Promise<{ token?: string }> {

@@ -1,5 +1,6 @@
 import type { FileHandle } from 'node:fs/promises'
 import { parseTarHeader, TarParseError } from 'remix/tar-parser'
+import { defaultContentLimits } from '../transfers/content-limits.ts'
 
 export class UnsupportedInspection extends Error {
   readonly _tag = 'UnsupportedInspection'
@@ -11,7 +12,6 @@ export type ArchiveItem = {
 }
 
 const blockSize = 512
-const maxEntries = 1000
 const maxNames = 128 * 1024
 const maxArchiveSize = 4 * 1024 ** 4
 const maxTrailingPadding = 64 * 1024
@@ -44,6 +44,7 @@ export async function listTarHeaders(
   handle: FileHandle,
   size: number,
   signal: AbortSignal,
+  maxEntries = defaultContentLimits.archivePreviewEntries,
 ): Promise<ArchiveItem[]> {
   if (
     !Number.isSafeInteger(size) ||

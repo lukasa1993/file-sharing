@@ -1,20 +1,24 @@
 import { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
+import { ContentPolicy } from './content-limits.ts'
 import type { FileHandle } from 'node:fs/promises'
 import { Effect, type Clock } from 'effect'
 import { AppError, type Guard, type ResourceRef } from '../contracts.ts'
 import { attempt, runTask } from '../effects.ts'
 import type { Filesystem } from '../filesystem/index.ts'
+import { code, storageError } from '../filesystem/resolver.ts'
 import {
   ActivityRegistry,
   preparationDigest,
   type PreparationTimeouts,
   type Activity,
+  type BandwidthBudget,
   type TransferOptions,
 } from './streams.ts'
 
 export type UploadAccess = {
   actor: string
+  bandwidthBudgets?: readonly BandwidthBudget[]
   guard: Guard
   base?: ResourceRef
   scope?: string
@@ -134,6 +138,7 @@ export class Uploads {
     options: Readonly<Required<TransferOptions>>,
     private readonly clock: Clock.Clock,
     private readonly timeouts: PreparationTimeouts,
+    private readonly contentPolicy: ContentPolicy,
   ) {
     this.maxChunk = options.maxChunkBytes
     this.ttl = options.uploadTtlMs
@@ -178,23 +183,29 @@ export class Uploads {
       throw new AppError(410, 'Upload expired.')
     return ref
   }
-  private checkBudget(row: Upload, access: UploadAccess, extra: number) {
-    const quota = access.getQuota ? access.getQuota() : access.quota
-    if (quota != null) {
-      const used =
-        this.db
-          .query<{ n: number }, [string]>(
-            `
-        SELECT coalesce(sum(u.bytes),0) n FROM transfer_uploads u
-        WHERE u.actor=? AND u.state IN ('allocating','receiving','failed','publishing','completed')
-        AND (u.state != 'completed' OR NOT EXISTS (
+  quotaUsage(actor?: string) {
+    const filter = actor === undefined ? "u.scope=''" : 'u.actor=?'
+    const query = this.db.query<
+      { actor: string; used: number; reserved: number },
+      string[]
+    >(`
+      SELECT u.actor, sum(CASE WHEN u.state='completed' THEN u.bytes ELSE 0 END) used,
+        sum(CASE WHEN u.state!='completed' THEN u.bytes ELSE 0 END) reserved
+      FROM transfer_uploads u WHERE ${filter}
+        AND u.state IN ('allocating','receiving','failed','publishing','completed')
+        AND (u.state!='completed' OR NOT EXISTS (
           SELECT 1 FROM transfer_storage_files f JOIN fs_tracked_files t
           ON t.mount=f.mount AND t.identity=f.identity
           WHERE f.upload_id=u.id AND t.state='deleted'
-        ))`,
-          )
-          .get(row.actor)?.n ?? 0
-      if (extra > quota - used)
+        )) GROUP BY u.actor`)
+    return actor === undefined ? query.all() : query.all(actor)
+  }
+
+  private checkBudget(row: Upload, access: UploadAccess, extra: number) {
+    const quota = access.getQuota ? access.getQuota() : access.quota
+    if (quota != null) {
+      const usage = this.quotaUsage(row.actor)[0]
+      if (extra > quota - (usage?.used ?? 0) - (usage?.reserved ?? 0))
         throw new AppError(413, 'Upload capacity exceeded.')
     }
     if (row.scope && access.cap != null) {
@@ -222,14 +233,25 @@ export class Uploads {
       .get(row.actor)
     if (active && (active.n >= 2048 || active.actorCount >= 128))
       throw new AppError(429, 'Too many unfinished uploads.')
-    const held =
-      this.db
-        .query<{ n: number }, [string]>(
-          `SELECT coalesce(sum(bytes-offset),0) n FROM transfer_uploads
-      WHERE mount=? AND state IN ('allocating','receiving','failed','publishing')`,
-        )
-        .get(row.mount)?.n ?? 0
-    if (row.bytes > free - held)
+    const { maxUploadBytes, maxStagingBytes } = this.contentPolicy.current
+    if (maxUploadBytes && row.bytes > maxUploadBytes)
+      throw new AppError(413, 'This file exceeds the maximum upload size.')
+    const held = this.db
+      .query<{ remaining: number; reserved: number }, [string]>(
+        `SELECT coalesce(sum(bytes-offset),0) remaining, coalesce(sum(bytes),0) reserved FROM transfer_uploads
+       WHERE mount=? AND state IN ('allocating','receiving','failed','publishing','skipping','cleaning')`,
+      )
+      .get(row.mount)
+    if (
+      maxStagingBytes &&
+      row.bytes > 0 &&
+      row.bytes > maxStagingBytes - (held?.reserved ?? 0)
+    )
+      throw new AppError(
+        507,
+        'Staging capacity is full. Try again after another upload finishes.',
+      )
+    if (row.bytes > free - (held?.remaining ?? 0))
       throw new AppError(507, 'Insufficient storage space.')
     this.db
       .query(
@@ -588,18 +610,22 @@ export class Uploads {
         if (item.done) break
         if (item.value.byteLength > maximum - length)
           throw new AppError(413, 'Chunk exceeds the available upload length.')
-        await job.meter(item.value.byteLength)
         let used = 0
         while (used < item.value.byteLength) {
-          const { bytesWritten } = await handle.write(
-            item.value,
-            used,
-            item.value.byteLength - used,
-            row.offset + length + used,
-          )
-          if (!bytesWritten)
-            throw new AppError(507, 'Could not write the file.')
-          used += bytesWritten
+          const quantum = job.quantum(item.value.byteLength - used)
+          await job.meter(quantum)
+          const end = used + quantum
+          while (used < end) {
+            const { bytesWritten } = await handle.write(
+              item.value,
+              used,
+              end - used,
+              row.offset + length + used,
+            )
+            if (!bytesWritten)
+              throw new AppError(507, 'Could not write the file.')
+            used += bytesWritten
+          }
         }
         length += item.value.byteLength
       }
@@ -635,7 +661,7 @@ export class Uploads {
       access.actor,
       row.bytes,
       req,
-      undefined,
+      access.bandwidthBudgets,
       writer.aborter.signal,
     )
     job.initialBytes = offset
@@ -673,6 +699,9 @@ export class Uploads {
               409,
               'Upload interrupted. Resume from the confirmed offset.',
             )
+          const failureCode = code(error)
+          if (failureCode === 'ENOSPC' || failureCode === 'EDQUOT')
+            throw storageError(error)
           throw error
         }
       } finally {

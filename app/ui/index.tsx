@@ -8,6 +8,7 @@ import {
   sizeLabel,
 } from './base'
 import { defaultBrand } from '../contracts'
+import { archiveFormats } from '../archive-formats'
 import { uploadInputs } from './files'
 import { PasswordField } from './login-client'
 
@@ -18,11 +19,15 @@ export { buildUiAssets } from './assets'
 export async function renderLogin({
   csrf,
   error,
+  oidc,
+  providerError,
   next,
   brand = defaultBrand,
 }: {
   csrf: string
   error?: string
+  oidc?: boolean
+  providerError?: boolean
   next?: string
   brand?: string
 }) {
@@ -42,15 +47,17 @@ export async function renderLogin({
               Username
               <input
                 name="username"
-                aria-invalid={error ? true : undefined}
-                aria-describedby={error ? 'login-error' : undefined}
+                aria-invalid={error && !providerError ? true : undefined}
+                aria-describedby={
+                  error && !providerError ? 'login-error' : undefined
+                }
                 required
                 autocomplete="username"
                 autocapitalize="none"
                 spellcheck={false}
               />
             </label>
-            <PasswordField invalid={Boolean(error)} />
+            <PasswordField invalid={Boolean(error && !providerError)} />
             {error ? (
               <p id="login-error" class="error" role="alert">
                 {error}
@@ -60,6 +67,13 @@ export async function renderLogin({
               Sign in {icon('arrow', 17)}
             </button>
           </form>
+          {oidc ? (
+            <form action="/_/auth/oidc" method="post" data-rmx-document>
+              {csrfField(csrf)}
+              {next ? <input type="hidden" name="next" value={next} /> : null}
+              <button type="submit">Continue with identity provider</button>
+            </form>
+          ) : null}
           <div class="auth-help">
             {icon('share', 16)}
             <p>
@@ -76,6 +90,25 @@ export async function renderLogin({
     brand,
   )
 }
+export async function renderProviderRedirect(location: string, brand: string) {
+  const page = await documentPage(
+    'Continue to your identity provider',
+    signedOut(
+      brand,
+      <p>
+        <a href={location}>Continue to your identity provider</a>
+      </p>,
+    ),
+    '',
+    200,
+    brand,
+  )
+  // Navigate as a document so the local form can retain its same-origin form-action policy.
+  page.headers.set('Refresh', '0; url=' + location)
+  page.headers.set('Referrer-Policy', 'no-referrer')
+  return page
+}
+
 export type PublicSharePage = {
   kind: 'unlock' | 'file' | 'directory' | 'selection' | 'upload'
   title: string
@@ -197,9 +230,19 @@ export async function renderPublicShare(p: PublicSharePage) {
             </ul>
           ) : null}
           {p.downloadUrl ? (
-            <a class="button" href={p.downloadUrl} download data-rmx-document>
-              {icon('archive')}Download archive
-            </a>
+            <div class="actions">
+              {archiveFormats.map((format) => (
+                <a
+                  class="button"
+                  href={p.downloadUrl + '&format=' + format.extension}
+                  download
+                  data-rmx-document
+                >
+                  {icon('archive')}
+                  {format.label}
+                </a>
+              ))}
+            </div>
           ) : null}
         </>
       ) : null}

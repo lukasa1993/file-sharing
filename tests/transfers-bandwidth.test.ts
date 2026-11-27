@@ -47,3 +47,37 @@ test('one share schedules concurrent streams, later ranges and cancellations aga
     ),
   )
 })
+
+test('signed-in recipients share their account budget with independent uploads and live rate changes', async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make()
+        const jobs = new ActivityRegistry(defaultTransferLimits, clock)
+        const req = new Request('http://localhost/files')
+        let rate = 0
+        const account = { key: 'user-uuid', rate: () => rate }
+        const download = jobs.start('download', 'share:abc', null, req, [
+          { key: 'share:abc', rate: 32768 },
+          account,
+        ])
+        const upload = jobs.start('upload', account.key, 2048, req, [account])
+        expect(upload.quantum(65536)).toBe(65536)
+        rate = 8192
+        expect(download.quantum(65536)).toBe(1024)
+        yield* Effect.promise(() => upload.meter(1024))
+        const pending = download.meter(1024)
+        yield* clock.adjust(124)
+        expect(download.bytes).toBe(0)
+        yield* clock.adjust(1)
+        yield* Effect.promise(() => pending)
+        expect(download.bytes).toBe(1024)
+        rate = 0
+        expect(download.quantum(65536)).toBe(4096)
+        expect(upload.quantum(65536)).toBe(65536)
+        download.remove()
+        upload.remove()
+      }),
+    ),
+  )
+})

@@ -60,7 +60,7 @@ Sections 1–10 define the product requirements. Sections 11–17 define contrac
 **P1**
 
 - Configurable bandwidth limits, global and per-user concurrent transfer limits, transfer cancellation from administration, and measured rate reporting.
-- Folder/multi-selection download as streamed TAR (or TAR.GZ) with safe entry names, no following links, bounded resources. Optionally stage completed archives for resumable downloads with expiry and cleanup. On-the-fly streams do not promise arbitrary range resumption. ZIP/ZIP64 remains desired but see §11.5; do not load giant archives into RAM.
+- Folder/multi-selection download as streamed TAR (or TAR.GZ) with safe entry names, no following links, bounded resources. Optionally stage completed archives for resumable downloads with expiry and cleanup. On-the-fly streams do not promise arbitrary range resumption. The owner selected TAR and TAR.GZ for exports. ZIP and ZIP64 are outside the agreed format set. Stream large archives with bounded memory.
 
 ## 3. Uploads
 
@@ -253,7 +253,7 @@ This is the main architectural risk. Remix does not provide OS-level root confin
 ### 11.5 Dependency-free media/archive limits
 
 - Bun v1.4 provides native image operations. Official docs list JPEG/PNG/WebP and BMP/GIF decode on Linux; HEIC/AVIF may not be available there. Use `Bun.Image` with explicit `maxPixels` and input/output bounds; no format claims until tested in the actual image. Derivative caches can be rebuilt. Browser-native previews are format/codec dependent.
-- Provide bounded streaming TAR export with optional streaming gzip. Use the official `remix/tar-parser` for supported inspection. Evaluate ZIP/ZIP64 on the pinned stack during this build. Enabling ZIP requires a verified native writer or owner approval for an implementation or dependency. Record the result and identify the actual archive format in the download action. Do not invoke shell `tar`, `zip`, FFmpeg or install utilities silently. No archive extraction endpoint in P0.
+- Provide bounded streaming TAR export with optional streaming gzip. Use official Remix TAR parsing for supported inspection. The owner selected TAR and TAR.GZ as the export formats. Archive inspection reads metadata without extracting entries.
 - `Bun.markdown` does not automatically establish XSS safety. Render safe escaped text or a narrowly allowlisted AST/renderer only after tests; no raw HTML or arbitrary dangerous link URLs.
 
 ## 12. Shared implementation contracts
@@ -502,7 +502,7 @@ G0–G4 and the mandatory parts of G5 pass. The direct dependency allowlist pass
 - Exact admin default limits and retention. Initial priorities and route namespace can be changed at G0 before freeze.
 - Whether to support hostile external writers beyond the trusted-host/SMB/NFS contract. If yes, a stronger OS confinement design or native helper may be necessary; never weaken security to maintain zero dependencies.
 - Exact stable-file/resume policy for externally in-place modified files (trusted publish-by-rename is recommended). Snapshot mode optional and off by default.
-- ZIP/ZIP64 export, advanced PDF/Markdown safety, video thumbnails/transcoding, unsupported Linux image codecs, OIDC, WebDAV, quotas for external writers, optional search index. Keep these scoped until native APIs and security are verified; no hidden dependency additions. No passkeys/TOTP by explicit owner decision.
+- The owner selected TAR and TAR.GZ exports. Other capability checks cover advanced PDF/Markdown safety, video thumbnails/transcoding, unsupported Linux image codecs, OIDC, WebDAV, quotas for external writers and an optional search index. Keep these scoped until native APIs and security are verified; no hidden dependency additions. No passkeys/TOTP by explicit owner decision.
 - Browser support matrix beyond recent Chrome/Firefox; test Safari/mobile where feasible. Native resume depends on browser, validators and server/proxy configuration.
 
 ## 17. Verification references and limitations

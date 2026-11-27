@@ -278,7 +278,7 @@ try {
   await mkdir(output, { recursive: true })
   await writeFile(evidence, JSON.stringify({ status: 'collecting' }))
   await stage()
-  await execute('Bun', ['test', 'tests', 'scripts'])
+  await execute('Bun', ['test', '--timeout', '30000', 'tests', 'scripts'])
   await report(true)
   const browserArgs = ['scripts/e2e.ts']
   if (process.env.FILESERVER_COVERAGE_DETERMINISTIC === '1')

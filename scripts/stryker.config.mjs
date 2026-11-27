@@ -1,14 +1,19 @@
-// Stryker's bundled command runner sets the active mutation in the Bun test child's environment.
+// Select native and browser suites using mutation coverage observed in a clean sandbox.
 const selected = process.env.FILESERVER_MUTATION_FILES
 export default {
-  testRunner: 'command',
-  commandRunner: {
-    command: "bun test --path-ignore-patterns='**/performance/**'",
-  },
+  plugins: ['./scripts/mutation/runner.mjs', './scripts/mutation/progress.mjs'],
+  testRunner: 'lshare-bun',
+  dryRunTimeoutMinutes: 45,
   mutate: selected
     ? JSON.parse(selected)
-    : ['app/**/*.{ts,tsx}', 'server.ts', 'public/**/*.js'],
-  coverageAnalysis: 'off',
+    : [
+        'app/**/*.{ts,tsx}',
+        'server.ts',
+        'public/**/*.js',
+        'scripts/ops.ts',
+        'scripts/storage-inventory.ts',
+      ],
+  coverageAnalysis: 'perTest',
   incremental: true,
   incrementalFile:
     process.env.FILESERVER_MUTATION_INCREMENTAL ||
@@ -22,7 +27,7 @@ export default {
     '.claude/**',
     'node_modules/**',
   ],
-  reporters: ['clear-text', 'json'],
+  reporters: ['clear-text', 'json', 'lshare-progress'],
   jsonReporter: { fileName: '.quality/mutation/report.json' },
   thresholds: {
     high: 100,
@@ -30,6 +35,8 @@ export default {
     break: process.env.FILESERVER_MUTATION_SHARD === '1' ? null : 85,
   },
   concurrency: 2,
-  timeoutMS: 15000,
+  // Allow the browser to report its locator/assertion failure before Stryker
+  // terminates the process group as a timeout.
+  timeoutMS: 60000,
   disableTypeChecks: false,
 }

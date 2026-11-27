@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { parseTar } from 'remix/tar-parser'
+import { archiveMembers, filePayload, uploadFiles } from './helpers/transfer.ts'
 import { beforeEach, describe, test } from '@e2e-dev/web'
 import { credentials, expect, secrets, type TestFixtures } from 'e2e'
 import { folder, shareItem } from './helpers/share.ts'
@@ -56,7 +56,11 @@ describe('sharing with recipients', { session: 'owner' }, () => {
   }) => {
     const alias = unique('selection'),
       directory = unique('materials')
+    const nested = filePayload('recipient.txt', 'Nested recipient bytes.')
     await folder(screen, directory)
+    await screen.getByRole('link', directory, { exact: true }).tap()
+    await uploadFiles(screen, [nested])
+    await app.open('/_/files?mount=e2e')
     await screen
       .getByRole('checkbox', 'Select ' + sourceFile, { exact: true })
       .check()
@@ -71,27 +75,44 @@ describe('sharing with recipients', { session: 'owner' }, () => {
     const folderHeading = await screen
       .getByRole('heading', directory)
       .textContent()
+    const folderMembers = {
+      [directory]: '',
+      [directory + '/' + nested.name]: nested.buffer.toString('hex'),
+    }
+    for (const format of ['tar', 'tar.gz'] as const) {
+      const saved = await browser.waitForDownload(() =>
+        screen
+          .getByRole('link', 'Download ' + format.toUpperCase(), {
+            exact: true,
+          })
+          .tap(),
+      )
+      expect(saved.suggestedFilename).toBe('shared-files.' + format)
+      expect(await archiveMembers(saved.absolutePath, format)).toEqual(
+        folderMembers,
+      )
+    }
     await screen.getByRole('link', 'Parent folder').tap()
     const names = await screen.getByRole('listitem').count()
     const download = await browser.waitForDownload(() =>
       screen.getByRole('link', /handoff\.txt/).tap(),
     )
 
-    const archive = await browser.waitForDownload(() =>
-      screen.getByRole('link', 'Download archive').tap(),
-    )
-    const inventory = new Map<string, Buffer>()
-    await parseTar(await readFile(archive.absolutePath), async (entry) => {
-      inventory.set(
-        entry.name.replace(/\/$/, ''),
-        Buffer.from(await entry.bytes()),
+    for (const format of ['tar', 'tar.gz'] as const) {
+      const saved = await browser.waitForDownload(() =>
+        screen
+          .getByRole('link', 'Download ' + format.toUpperCase(), {
+            exact: true,
+          })
+          .tap(),
       )
-    })
-
+      expect(saved.suggestedFilename).toBe('shared-files.' + format)
+      expect(await archiveMembers(saved.absolutePath, format)).toEqual({
+        ...folderMembers,
+        [sourceFile]: (await sourceBytes()).toString('hex'),
+      })
+    }
     await expect(screen.getByRole('heading', 'Shared files')).toBeVisible()
-    expect(archive.suggestedFilename).toBe('shared-files.tar')
-    expect([...inventory.keys()].sort()).toEqual([directory, sourceFile].sort())
-    expect(inventory.get(sourceFile)?.equals(await sourceBytes())).toBe(true)
     expect(folderHeading).toBe(directory)
     expect(names).toBe(2)
     expect(download.suggestedFilename).toBe(sourceFile)
@@ -177,7 +198,7 @@ describe('sharing with recipients', { session: 'owner' }, () => {
     await browser.clearCookies()
     await app.open('/' + alias)
     const privateListing = await screen
-      .getByRole('link', 'Download archive')
+      .getByRole('link', /^Download TAR/)
       .count()
     await screen
       .getByRole('button', 'Choose files')

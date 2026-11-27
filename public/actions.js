@@ -11,13 +11,16 @@ import {
   manager,
   navigate,
   notice,
+  refKey,
   refUrl,
+  rowEntry,
   refresh,
   selection,
   show,
   size,
   working,
 } from './workspace.js'
+import { runFileOperation } from './operation-progress.js'
 let targetRows = [],
   operation = '',
   shareKind = 'download',
@@ -106,6 +109,7 @@ export function menu(entry) {
   const can = (...names) => !perms || names.every((n) => perms.includes(n))
   const visible = {
     request: entry.kind === 'directory' && can('share', 'upload'),
+    archive: can(entry.kind === 'directory' ? 'list' : 'read'),
     share: can('share'),
     rename: can('rename'),
     trash: can('delete'),
@@ -276,6 +280,7 @@ function shareDialog(rows, kind, existing) {
     f.elements.latestAtPath.checked = !!existing.latestAtPath
     if (existing.bytesPerSecond)
       f.elements.bandwidthKiB.value = existing.bytesPerSecond / 1024
+    if (f.elements.ownerId) f.elements.ownerId.value = existing.ownerId || ''
     f.elements.alias.value = existing.alias
     f.elements.access.value = existing.access
     f.elements.mode.value = existing.mode
@@ -314,6 +319,7 @@ async function submitShare(f) {
       ? new Date(value.expiresAt.value).toISOString()
       : null
   }
+  if (editId && value.ownerId?.value) body.ownerId = value.ownerId.value
   const alias = value.alias.value.trim()
   if (alias) body.alias = alias
   if (value.access.value === 'password' && value.password.value)
@@ -359,7 +365,9 @@ async function submitOp(f) {
       mountId: f.elements.mountId.value,
       segments: f.elements.path.value.split('/').filter(Boolean),
     }
-  const data = await json(ops, 'POST', body)
+  const data = body.destination
+    ? await runFileOperation(f, ops, body)
+    : await json(ops, 'POST', body)
   clearChoice()
   closeDialogs()
   await refresh()
@@ -396,7 +404,7 @@ export function dropMove(data, dest) {
   const rows = JSON.parse(data)
   if (Array.isArray(rows) && rows.length) opDialog('move', rows, dest)
 }
-export async function activate(action, rows) {
+export async function activate(action, rows, archiveFormat = 'tar') {
   if (action === 'createDir') {
     opDialog(action, [])
     return
@@ -451,6 +459,7 @@ export async function activate(action, rows) {
   }
   if (action === 'archive') {
     const url = new URL('/_/archive', location.origin)
+    url.searchParams.set('format', archiveFormat)
     for (const item of rows)
       url.searchParams.append('ref', JSON.stringify(item.ref))
     const a = document.createElement('a')
@@ -560,7 +569,74 @@ function inlineRename(row, entry) {
 }
 let previewTicket = 0,
   previewItem
-export async function openPreview(entry) {
+const rasterTypes = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+])
+function neighboringImages() {
+  return all('.file-row')
+    .map(rowEntry)
+    .filter(
+      (item) =>
+        item.kind === 'file' &&
+        /\.(?:jpe?g|png|gif|webp|bmp)$/i.test(item.name) &&
+        (!item.permissions || item.permissions.includes('read')),
+    )
+}
+function syncGallerySize() {
+  const surface = $('[data-gallery-surface]')
+  if (!surface) return
+  const expanded =
+    document.fullscreenElement === surface ||
+    surface.classList.contains('expanded')
+  const button = $('[data-gallery-fullscreen]', surface)
+  button.setAttribute('aria-pressed', String(expanded))
+  button.textContent = document.fullscreenEnabled
+    ? expanded
+      ? 'Exit fullscreen'
+      : 'Fullscreen'
+    : expanded
+      ? 'Exit expanded view'
+      : 'Expand view'
+}
+async function changeImage(direction) {
+  const ticket = previewTicket,
+    gallery = neighboringImages()
+  const index = gallery.findIndex(
+    (entry) => refKey(entry.ref) === refKey(previewItem.ref),
+  )
+  if (index < 0) return
+  for (
+    let i = index + direction;
+    i >= 0 && i < gallery.length;
+    i += direction
+  ) {
+    const item = gallery[i]
+    const response = await fetch(refUrl('/_/preview', item.ref) + '&probe=1', {
+      method: 'HEAD',
+      cache: 'no-store',
+    })
+    if (ticket !== previewTicket || !$('#preview')?.open) return
+    if (
+      response.ok &&
+      rasterTypes.has(
+        (response.headers.get('content-type') || '').split(';')[0],
+      ) &&
+      !response.headers
+        .get('content-disposition')
+        ?.toLowerCase()
+        .startsWith('attachment')
+    ) {
+      await openPreview(item, response)
+      return
+    }
+  }
+  $('[data-adjacent="' + direction + '"]').disabled = true
+}
+export async function openPreview(entry, headers) {
   const ticket = ++previewTicket
   previewItem = entry
   const dialog = $('#preview'),
@@ -585,21 +661,14 @@ export async function openPreview(entry) {
     'tar',
   ].includes(ext)
   inspect.href = refUrl('/_/inspect', entry.ref)
-  const gallery = all('.file-row')
-    .map((row) => JSON.parse(row.dataset.entry))
-    .filter((item) => item.kind === 'file')
-  for (const button of all('[data-adjacent]', dialog)) {
-    const current = gallery.findIndex(
-      (i) =>
-        i.ref.mountId === entry.ref.mountId &&
-        JSON.stringify(i.ref.segments) === JSON.stringify(entry.ref.segments),
-    )
-    button.disabled = !gallery[current + Number(button.dataset.adjacent)]
-  }
+  const nav = $('.gallery-nav', dialog)
+  nav.hidden = true
   host.replaceChildren()
   host.textContent = 'Loading preview…'
   show('preview')
-  const r = await fetch(url, { method: 'HEAD', cache: 'no-store' })
+  const r =
+    headers ||
+    (await fetch(url + '&probe=1', { method: 'HEAD', cache: 'no-store' }))
   if (!dialog.open || ticket !== previewTicket) return
   if (!r.ok) {
     host.textContent = 'Preview unavailable. Download the file to open it.'
@@ -609,26 +678,36 @@ export async function openPreview(entry) {
   if (
     r.headers.get('content-disposition')?.toLowerCase().startsWith('attachment')
   ) {
-    host.textContent = 'A preview is unavailable for this format.'
+    host.textContent = 'A preview is unavailable for this file.'
     return
   }
   let tag
-  if (
-    [
-      'image/jpeg',
-      'image/png',
-      'image/gif',
-      'image/webp',
-      'image/bmp',
-    ].includes(type)
-  )
+  if (rasterTypes.has(type)) {
     tag = 'img'
-  else if (type.startsWith('audio/')) tag = 'audio'
+    const gallery = neighboringImages()
+    const index = gallery.findIndex(
+      (item) => refKey(item.ref) === refKey(entry.ref),
+    )
+    for (const button of all('[data-adjacent]', nav))
+      button.disabled =
+        index < 0 || !gallery[index + Number(button.dataset.adjacent)]
+    nav.hidden = false
+    syncGallerySize()
+  } else if (type.startsWith('audio/')) tag = 'audio'
   else if (type.startsWith('video/')) tag = 'video'
   if (tag) {
     const media = document.createElement(tag)
     if (tag === 'img') media.alt = entry.name
     else media.controls = true
+    media.addEventListener(
+      'error',
+      () => {
+        if (dialog.open && ticket === previewTicket && host.contains(media))
+          host.textContent =
+            'This browser could not display the file. Download it to open it.'
+      },
+      { once: true },
+    )
     media.src = url
     host.replaceChildren(media)
     return
@@ -639,13 +718,17 @@ export async function openPreview(entry) {
     if (!dialog.open || ticket !== previewTicket) return
     const text = await response.text(),
       version = response.headers.get('X-File-Version'),
-      canEdit =
-        entry.permissions?.includes('modify') &&
-        version &&
-        response.headers.get('X-Preview-Truncated') !== 'true'
+      truncated = response.headers.get('X-Preview-Truncated') === 'true',
+      canEdit = entry.permissions?.includes('modify') && version && !truncated
     const pre = document.createElement('pre')
     pre.textContent = text
     host.replaceChildren(pre)
+    if (truncated) {
+      const note = document.createElement('p')
+      note.textContent =
+        'Showing the beginning of this file. Download the original to read the rest.'
+      host.prepend(note)
+    }
     if (canEdit) {
       const edit = document.createElement('button')
       edit.textContent = 'Edit text'
@@ -693,9 +776,28 @@ export async function openPreview(entry) {
     }
     return
   }
-  host.textContent = 'A preview is unavailable for this format.'
+  host.textContent = 'A preview is unavailable for this file.'
 }
 export function initActions() {
+  document.addEventListener('fullscreenchange', syncGallerySize)
+  document.addEventListener('keydown', (e) => {
+    const nav = $('#preview[open] .gallery-nav:not([hidden])')
+    if (!nav || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+    const direction =
+      e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
+    if (direction) {
+      e.preventDefault()
+      const button = $('[data-adjacent="' + direction + '"]', nav)
+      if (!button.disabled) button.click()
+    } else if (
+      e.key === 'Escape' &&
+      nav.parentElement.classList.contains('expanded')
+    ) {
+      e.preventDefault()
+      nav.parentElement.classList.remove('expanded')
+      syncGallerySize()
+    }
+  })
   document.addEventListener('submit', (event) => {
     const f = event.target
     if (f.id === 'bulk-rename-form') {
@@ -801,6 +903,7 @@ export function initActions() {
       }
       if (e.target.id === 'preview') {
         previewTicket++
+        $('[data-gallery-surface]', e.target)?.classList.remove('expanded')
         $('[data-preview-body]', e.target)?.replaceChildren()
       }
     },
@@ -842,14 +945,16 @@ export function initActions() {
         return
       }
       if (b.hasAttribute('data-adjacent')) {
-        const gallery = all('.file-row')
-          .map((row) => JSON.parse(row.dataset.entry))
-          .filter((item) => item.kind === 'file')
-        const current = gallery.findIndex(
-          (i) => JSON.stringify(i.ref) === JSON.stringify(previewItem?.ref),
-        )
-        const item = gallery[current + Number(b.dataset.adjacent)]
-        if (item) await openPreview(item)
+        await changeImage(Number(b.dataset.adjacent))
+        return
+      }
+      if (b.hasAttribute('data-gallery-fullscreen')) {
+        const surface = b.closest('[data-gallery-surface]')
+        if (document.fullscreenElement === surface)
+          await document.exitFullscreen()
+        else if (document.fullscreenEnabled) await surface.requestFullscreen()
+        else surface.classList.toggle('expanded')
+        syncGallerySize()
         return
       }
       if (b.hasAttribute('data-target-add')) {
@@ -887,7 +992,7 @@ export function initActions() {
           : b.closest('[data-selection-tools]')
             ? selection()
             : []
-        await activate(b.dataset.action, rows)
+        await activate(b.dataset.action, rows, b.dataset.archiveFormat)
       } else if (b.hasAttribute('data-copy-result-url')) {
         await copy(copiedUrl)
         $('[data-copy-result]').textContent = 'Link copied.'

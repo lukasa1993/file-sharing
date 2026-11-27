@@ -14,6 +14,7 @@ export type Shell = {
   csrf: string
   mounts: MountView[]
   home?: ResourceRef | null
+  entryPoints?: ResourceRef[]
   brand?: string
   theme?: string
   sort?: string
@@ -188,7 +189,7 @@ const sections = [
 function folderBranch(
   ref: ResourceRef,
   label: string,
-  glyph: 'storage' | 'lock',
+  glyph: 'storage' | 'lock' | 'folder',
   id: string,
   available = true,
 ) {
@@ -266,6 +267,14 @@ export function appShell(
           {shell.home
             ? folderBranch(shell.home, 'Private home', 'lock', 'home-folders')
             : null}
+          {shell.entryPoints?.map((ref, index) =>
+            folderBranch(
+              ref,
+              ref.segments.at(-1) || ref.mountId,
+              'folder',
+              'granted-folders-' + index,
+            ),
+          )}
           {shell.mounts.map((m) =>
             folderBranch(
               { mountId: m.id, segments: [] },

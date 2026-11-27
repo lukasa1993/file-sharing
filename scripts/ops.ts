@@ -1,5 +1,8 @@
 import { Database } from 'bun:sqlite'
-import { array, literal, object, parse, string } from 'remix/data-schema'
+import { withStateLease } from '../app/state-lease.ts'
+import { loadConfig } from '../app/config.ts'
+import { recordStorage, verifyAndRebind } from './storage-inventory.ts'
+import { array, enum_, object, parse, string } from 'remix/data-schema'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import {
@@ -125,59 +128,116 @@ function contains(parent: string, child: string) {
   )
 }
 
-export async function backup(stateDirectory: string, destination: string) {
-  const physicalDestination = join(
+async function outsideStorage(
+  configFile: string,
+  destination: string,
+  other: string[] = [],
+) {
+  const dest = join(
     await realpath(dirname(resolve(destination))),
     basename(resolve(destination)),
   )
   const config = parse(
     object({ mounts: array(object({ path: string() })) }),
-    await readJson(join(stateDirectory, 'config/mounts.json')),
+    await readJson(configFile),
   )
-  const protectedPaths = [
-    await realpath(stateDirectory),
-    ...config.mounts.map((mount) => mount.path),
-  ]
-  if (protectedPaths.some((path) => contains(path, physicalDestination))) {
+  if (
+    [...other, ...config.mounts.map((m) => m.path)].some((path) =>
+      contains(path, dest),
+    )
+  ) {
     throw new Error(
-      'Choose a backup destination outside application state and served roots.',
+      'Choose a destination outside application state and served roots.',
     )
   }
+}
+
+async function storageInventory(
+  state: string,
+  snapshot: string,
+  record: boolean,
+) {
+  const config = loadConfig({
+    PUBLIC_ORIGIN: 'http://127.0.0.1',
+    DATA_DIR: join(state, 'data'),
+    CONFIG_FILE: join(state, 'config', 'mounts.json'),
+    SESSION_SECRET_FILE: join(state, 'config', 'session.key'),
+  })
+  const db = new Database(snapshot)
+  try {
+    db.exec('BEGIN IMMEDIATE')
+    if (record) await recordStorage(db, config.mounts)
+    else await verifyAndRebind(db, config.mounts)
+    db.exec('COMMIT')
+    if (!record) db.exec('VACUUM')
+  } catch (error) {
+    if (db.inTransaction) db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.close()
+  }
+}
+
+export async function backup(
+  stateDirectory: string,
+  destination: string,
+  portable = false,
+) {
+  await outsideStorage(
+    join(stateDirectory, 'config', 'mounts.json'),
+    destination,
+    [await realpath(stateDirectory)],
+  )
   const dbPath = join(stateDirectory, 'data', dbName)
   await regularFile(dbPath)
-  await newDirectory(destination, async () => {
-    const db = new Database(dbPath, { readonly: true })
-    const snapshot = join(destination, dbName)
-    try {
-      db.exec('PRAGMA busy_timeout = 5000')
-      db.query('VACUUM INTO ?').run(resolve(snapshot))
-    } finally {
-      db.close()
-    }
-    await chmod(snapshot, 0o600)
-    checkDatabase(snapshot)
-    for (const name of configNames) {
-      await copyPrivate(
-        join(stateDirectory, 'config', name),
-        join(destination, name),
+  const snapshotState = () =>
+    newDirectory(destination, async () => {
+      const snapshot = join(destination, dbName)
+      const lock = portable ? new Database(dbPath) : undefined
+      try {
+        lock?.exec('PRAGMA busy_timeout=15000; BEGIN IMMEDIATE')
+        const db = new Database(dbPath, { readonly: true })
+        try {
+          db.exec('PRAGMA busy_timeout=5000')
+          db.query('VACUUM INTO ?').run(resolve(snapshot))
+        } finally {
+          db.close()
+        }
+        await chmod(snapshot, 0o600)
+        for (const name of configNames) {
+          await copyPrivate(
+            join(stateDirectory, 'config', name),
+            join(destination, name),
+          )
+        }
+        if (portable) await storageInventory(stateDirectory, snapshot, true)
+        checkDatabase(snapshot)
+      } finally {
+        lock?.close()
+      }
+      const sha256: Record<string, string> = {}
+      for (const name of snapshotFiles)
+        sha256[name] = await digest(join(destination, name))
+      const manifest = {
+        format: portable ? 2 : 1,
+        createdAt: new Date().toISOString(),
+        sha256,
+      }
+      await writeFile(
+        join(destination, 'manifest.json'),
+        JSON.stringify(manifest, null, 2) + '\n',
+        { mode: 0o600, flag: 'wx' },
       )
-    }
-    const sha256: Record<string, string> = {}
-    for (const name of snapshotFiles)
-      sha256[name] = await digest(join(destination, name))
-    const manifest = { format: 1, createdAt: new Date().toISOString(), sha256 }
-    await writeFile(
-      join(destination, 'manifest.json'),
-      JSON.stringify(manifest, null, 2) + '\n',
-      { mode: 0o600, flag: 'wx' },
-    )
-  })
+    })
+  if (portable)
+    await withStateLease(join(stateDirectory, 'data'), snapshotState)
+  else await snapshotState()
 }
 
 export async function restore(snapshot: string, destination: string) {
   const manifest = parse(
     object({
-      format: literal(1),
+      format: enum_([1, 2]),
       sha256: object({
         [dbName]: string(),
         'mounts.json': string(),
@@ -186,18 +246,28 @@ export async function restore(snapshot: string, destination: string) {
     }),
     await readJson(join(snapshot, 'manifest.json')),
   )
+  const mountFile = join(snapshot, 'mounts.json')
+  if ((await digest(mountFile)) !== manifest.sha256['mounts.json'])
+    throw new Error('Snapshot checksum mismatch for mounts.json.')
+  await outsideStorage(mountFile, destination, [await realpath(snapshot)])
   await newDirectory(destination, async () => {
     const data = join(destination, 'data')
     const config = join(destination, 'config')
     await mkdir(data, { mode: 0o700 })
     await mkdir(config, { mode: 0o700 })
-    for (const name of snapshotFiles) {
-      const target = join(name === dbName ? data : config, name)
-      await copyPrivate(join(snapshot, name), target)
-      if ((await digest(target)) !== manifest.sha256[name])
-        throw new Error(`Snapshot checksum mismatch for ${name}.`)
-    }
-    checkDatabase(join(data, dbName))
+    await withStateLease(data, async () => {
+      for (const name of snapshotFiles) {
+        const target = join(name === dbName ? data : config, name)
+        await copyPrivate(join(snapshot, name), target)
+        if ((await digest(target)) !== manifest.sha256[name])
+          throw new Error(`Snapshot checksum mismatch for ${name}.`)
+      }
+      checkDatabase(join(data, dbName))
+      if (manifest.format === 2) {
+        await storageInventory(destination, join(data, dbName), false)
+        checkDatabase(join(data, dbName))
+      }
+    })
   })
 }
 
@@ -208,10 +278,12 @@ if (import.meta.main) {
       !source ||
       !destination ||
       extra.length ||
-      (flag && (command !== 'init' || flag !== '--container'))
+      (flag &&
+        !(command === 'init' && flag === '--container') &&
+        !(command === 'backup' && flag === '--portable'))
     ) {
       throw new Error(
-        'Usage: ops init STATE USER [--container] | backup STATE NEW_SNAPSHOT | restore SNAPSHOT NEW_STATE',
+        'Usage: ops init STATE USER [--container] | backup STATE NEW_SNAPSHOT [--portable] | restore SNAPSHOT NEW_STATE',
       )
     }
     if (command === 'init') {
@@ -222,14 +294,16 @@ if (import.meta.main) {
         'Initialized private state. The initial credentials are in config/bootstrap.json inside the new state directory.',
       )
     } else if (command === 'backup') {
-      await backup(source, destination)
+      await backup(source, destination, flag === '--portable')
       console.log(
-        'SQLite metadata, mount configuration and signing key backed up.',
+        flag === '--portable'
+          ? 'Portable metadata snapshot and storage inventory verified. Keep the matching ordinary storage copy with this snapshot.'
+          : 'SQLite metadata, mount configuration and signing key backed up.',
       )
     } else if (command === 'restore') {
       await restore(source, destination)
       console.log(
-        'Metadata restored to new state. Reattach the matching storage roots before starting the service.',
+        'Metadata restored to new state. Verify the configured storage roots before starting the service.',
       )
     } else {
       throw new Error('Unknown operation. Choose init, backup, or restore.')

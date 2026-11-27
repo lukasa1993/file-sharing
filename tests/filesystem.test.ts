@@ -462,6 +462,55 @@ describe('batch editing', () => {
 })
 
 describe('scopes and retention', () => {
+  test('recursive search admits accounts separately and refreshes its per-minute budget', async () => {
+    await writeFile(join(home, 'field-notes'), 'notes')
+    const exercise = Effect.gen(function* () {
+      for (let i = 0; i < 12; i++)
+        yield* storage.searchTask(ref(), 'field', allow, 'reader-a')
+      const exhausted = yield* Effect.flip(
+        storage.searchTask(ref(), 'field', allow, 'reader-a'),
+      )
+      expect(exhausted.status).toBe(429)
+      expect(
+        yield* storage.searchTask(ref(), 'field', allow, 'reader-b'),
+      ).toHaveLength(1)
+      yield* TestClock.adjust(60_000)
+      expect(
+        yield* storage.searchTask(ref(), 'field', allow, 'reader-a'),
+      ).toHaveLength(1)
+    }).pipe(Effect.provide(TestClock.layer()))
+    await Effect.runPromise(exercise)
+  })
+  test('recursive scans have separate admission and release it when access fails', async () => {
+    await writeFile(join(home, 'field-notes'), 'notes')
+    const a = storage.search(ref(), 'field', allow, 'reader-a')
+    const b = storage.search(ref(), 'field', allow, 'reader-b')
+    const sameActor = storage.search(ref(), 'field', allow, 'reader-a')
+    const third = storage.search(ref(), 'field', allow, 'reader-c')
+    const [first, second, duplicate, full] = await Promise.allSettled([
+      a,
+      b,
+      sameActor,
+      third,
+    ])
+    expect(first.status).toBe('fulfilled')
+    expect(second.status).toBe('fulfilled')
+    for (const refused of [duplicate, full]) {
+      expect(refused).toMatchObject({
+        status: 'rejected',
+        reason: { status: 429 },
+      })
+    }
+    const denied: Guard = () => {
+      throw new AppError(403, 'Not allowed')
+    }
+    await expect(
+      storage.search(ref(), 'field', denied, 'reader-a'),
+    ).rejects.toMatchObject({ status: 403 })
+    expect(
+      await storage.search(ref(), 'field', allow, 'reader-a'),
+    ).toHaveLength(1)
+  })
   test('a test storage Layer uses a deterministic clock at the retention boundary', async () => {
     await writeFile(join(home, 'expired'), 'bytes')
     await storage.operate('trash', ref('expired'), null, allow)

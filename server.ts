@@ -2,6 +2,8 @@ import { Effect } from 'effect'
 import { createApp } from './app/application.ts'
 import { loadConfig } from './app/config.ts'
 import { asAppError, runTask } from './app/effects.ts'
+import type { AppConfig } from './app/contracts.ts'
+import { withStateLease } from './app/state-lease.ts'
 import { listenHttp } from './app/transport.ts'
 
 export { createApp } from './app/application.ts'
@@ -10,6 +12,10 @@ async function main() {
   const config = await runTask(
     Effect.try({ try: () => loadConfig(), catch: asAppError }),
   )
+  return withStateLease(config.dataDir, () => serve(config))
+}
+
+async function serve(config: AppConfig) {
   const app = await createApp(config)
   let server: Awaited<ReturnType<typeof listenHttp>>
   try {

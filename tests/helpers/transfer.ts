@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { gunzipSync } from 'node:zlib'
+import { parseTar } from 'remix/tar-parser'
 import type { Browser } from '@e2e-dev/web'
 import type { TestFixtures } from 'e2e'
 
@@ -42,4 +44,17 @@ export async function downloadFile(
     name: saved.suggestedFilename,
     bytes: await readFile(saved.absolutePath),
   }
+}
+
+export async function archiveMembers(path: string, format: 'tar' | 'tar.gz') {
+  const bytes = await readFile(path)
+  const tar = format === 'tar.gz' ? gunzipSync(bytes) : bytes
+  const entries: Record<string, string> = {}
+  await parseTar(tar, async (entry) => {
+    const name = entry.name.replace(/\/$/, '')
+    if (Object.hasOwn(entries, name))
+      throw new Error('Duplicate archive member ' + name)
+    entries[name] = Buffer.from(await entry.bytes()).toString('hex')
+  })
+  return entries
 }
