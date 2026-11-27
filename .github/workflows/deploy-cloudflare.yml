@@ -46,6 +46,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          R2_JURISDICTION: ${{ vars.R2_JURISDICTION }}
           OPERATION: ${{ inputs.operation }}
         run: |
           case "$OPERATION" in

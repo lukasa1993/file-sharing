@@ -1,6 +1,14 @@
 # Implementation and release evidence
 
-## Architecture
+## Cloudflare profile
+
+The same package provides a Workers entry point for `dl.ldev.cloud`. Both profiles share the owner link-management and transfer APIs. The Cloudflare adapter uses a SQLite Durable Object to reserve capacity and authorize transfers. It signs multipart PUT and download URLs for a private R2 bucket. [Transfer API](transfer-api.md) · [Deployment and private settings](cloudflare.md)
+
+In Codex Cloud, Chromium and Firefox each passed five cloud scenarios against local workerd and a separate MinIO storage origin. The browsers downloaded the exact bytes of an 8 MiB + 59 byte file. The native smoke checked empty uploads, byte ranges and scheduled cleanup. A quota run reserved forty 100 MB uploads, observed a simulated warning at 3.6 GB and refused an extra byte at 4 GB. This run exercised storage reservations without allocating 4 GB of file payloads.
+
+The production Wrangler bundle passed a dry run. The self-hosted Docker image built and passed an HTTPS login, resumable upload, recipient range download and link revocation behind NGINX. Production DNS activation, external inbox delivery and the live R2 deployment require account access. The manual deployment workflow accepts private settings through the `cloudflare-production` environment.
+
+## Self-hosted architecture
 
 One Bun 1.4.5 process serves Remix 3.3.0 routes, native Remix components, and the file-transfer endpoints. Effect 4.1.7 is the runtime dependency approved by the architecture addendum. SQLite stores metadata. Each configured mount retains its own file tree, marker and private staging area. The formatter, TypeScript declarations, Effect language service, mutation framework and browser runner are development dependencies. [Architecture addendum](EFFECT_SPEC.md)
 

@@ -26,7 +26,12 @@ import { observeWorkerd, prepareWorkerd } from './workerd.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const temp = await mkdtemp(join(tmpdir(), 'fileserver-istanbul-'))
-const output = resolve(root, '.quality/coverage')
+const cloudProbe = Bun.argv.includes('--check-cloud')
+const cloudReport = 'cloudflare/.quality/coverage-browser'
+const output = resolve(
+  root,
+  cloudProbe ? '.quality/cloud-coverage-probe' : '.quality/coverage',
+)
 const raw = join(temp, 'observations')
 const files = await sourceFiles()
 const seed = {}
@@ -218,7 +223,7 @@ async function report(nativeOnly = false) {
       )
     }
     if (
-      (path.startsWith('public/') ||
+      ((path.startsWith('public/') && path !== 'public/transfer-client.js') ||
         /\/ui\/(?:hydrate-login\.ts|login-client\.tsx)$/.test(path)) &&
       !browserFiles.has(path)
     )
@@ -257,7 +262,7 @@ async function report(nativeOnly = false) {
     } else missing.push(folder + ': browser run report')
   }
   const browserRun = await readBrowserRun('.e2e'),
-    cloudBrowserRun = await readBrowserRun('.e2e-cloud')
+    cloudBrowserRun = await readBrowserRun(cloudReport)
   const { lines, branches } = map.getCoverageSummary()
   console.log(
     `Combined Istanbul coverage: ${lines.covered}/${lines.total} lines (${lines.pct}%), ${branches.covered}/${branches.total} branches (${branches.pct}%), ${files.length} source files.`,
@@ -312,23 +317,63 @@ try {
   await mkdir(output, { recursive: true })
   await writeFile(evidence, JSON.stringify({ status: 'collecting' }))
   await stage()
-  await execute('Bun', ['test', '--timeout', '30000', 'tests', 'scripts'])
-  await report(true)
-  const browserArgs = ['scripts/e2e.ts']
-  if (process.env.FILESERVER_COVERAGE_DETERMINISTIC === '1')
-    browserArgs.push('--exclude-tag', 'agent')
-  await execute('Chromium', browserArgs)
+  if (!cloudProbe) {
+    await execute('Bun', ['test', '--timeout', '30000', 'tests', 'scripts'])
+    await report(true)
+    const browserArgs = ['scripts/e2e.ts']
+    if (process.env.FILESERVER_COVERAGE_DETERMINISTIC === '1')
+      browserArgs.push('--exclude-tag', 'agent')
+    await execute('Chromium', browserArgs)
+  }
   await observeWorkerd(temp, raw, 'coverage')
   await execute(
     'Cloudflare Chromium',
-    ['scripts/cloud-fixture.ts', '--output', join(temp, '.e2e-cloud')],
+    ['scripts/cloud-fixture.ts', '--output', join(temp, cloudReport)],
     {
       ...process.env,
       LSHARE_MINIO_CACHE:
         process.env.LSHARE_MINIO_CACHE || join(root, '.cloudflare/tools'),
     },
   )
-  process.exitCode = await report()
+  if (cloudProbe) {
+    if (runFailures.length)
+      throw new Error('The Cloudflare browser fixture failed.')
+    const { run } = await Bun.file(
+      join(temp, cloudReport, 'report.json'),
+    ).json()
+    if (!run.summary.executed)
+      throw new Error('No cloud browser tests executed.')
+    const collector = createCollector(seed)
+    const observed = { cloudbrowser: new Set(), workerd: new Set() }
+    for (const name of await readdir(raw)) {
+      const kind = name.split('-')[0]
+      if (!Object.hasOwn(observed, kind) || !name.endsWith('.json')) continue
+      const { files: record } = JSON.parse(
+        await readFile(join(raw, name), 'utf8'),
+      )
+      for (const [path, counts] of Object.entries(record)) {
+        collector.add(path, counts, name)
+        if (Object.values(counts.s).some((count) => count > 0))
+          observed[kind].add(path)
+      }
+    }
+    const client = ['cloudflare/assets/cloud.js', 'public/transfer-client.js']
+    for (const path of files.filter(
+      (p) => p.startsWith('cloudflare/') || client.includes(p),
+    )) {
+      const kind = client.includes(path) ? 'cloudbrowser' : 'workerd'
+      if (!observed[kind].has(path))
+        throw new Error('Missing cloud runtime execution for ' + path)
+    }
+    const result = {
+      status: 'cloud-probe',
+      summary: run.summary,
+      workerd: [...observed.workerd].sort(),
+      browser: [...observed.cloudbrowser].sort(),
+    }
+    await writeFile(evidence, JSON.stringify(result, null, 2))
+    console.log('Cloud instrumentation probe:', JSON.stringify(result))
+  } else process.exitCode = await report()
 } catch (error) {
   await writeFile(
     evidence,

@@ -189,8 +189,8 @@ class BunMutationRunner {
         await rm(report, { force: true })
       }
     }
-    const output = join(work, 'e2e-' + randomUUID())
     const cloud = suite.id.startsWith('cloudflare/browser/')
+    const output = join(cloud ? 'cloudflare' : '.', work, 'e2e-' + randomUUID())
     if (cloud)
       await observeWorkerd(
         process.cwd(),
