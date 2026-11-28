@@ -2,3 +2,13 @@ node_modules/
 **DS_Store**
 .env
 tmp/
+.e2e/
+.quality/
+.stryker-tmp/
+dist/
+.cloudflare/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env.*
+!.env.example

@@ -1,0 +1,2 @@
+File-sharing end-to-end fixture.
+This is the file the recipient should receive.

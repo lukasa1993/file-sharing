@@ -1,0 +1,35 @@
+services:
+  files:
+    build: .
+    user: "${FILES_UID:-1000}:${FILES_GID:-1000}"
+    environment:
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?Set the canonical public HTTPS origin}"
+      PORT: "8080"
+      BRAND_ICON_FILE: "${BRAND_ICON_FILE:-}"
+    ports:
+      - "127.0.0.1:${FILES_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ${FILES_STATE:?Set the absolute path to the initialized state}/config
+        target: /etc/fileserver
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${FILES_STATE}/data
+        target: /var/lib/fileserver
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${FILES_STORAGE:-${FILES_STATE}/storage}
+        target: /srv/files
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s

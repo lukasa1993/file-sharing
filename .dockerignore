@@ -1,0 +1,16 @@
+**
+!Dockerfile
+!package.json
+!bun.lock
+!tsconfig.json
+!server.ts
+!app/
+!app/**
+!public/
+!public/**
+!scripts/
+!scripts/ops.ts
+!scripts/storage-inventory.ts
+!scripts/build.ts
+!shared/
+!shared/**

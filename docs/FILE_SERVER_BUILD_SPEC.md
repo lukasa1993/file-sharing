@@ -3,7 +3,9 @@
 **Status:** implementation brief, architecture locked; production release subject to the gates below.  
 **Documentation review:** 2026-11-27.  
 **Example public origin:** `https://dl.lnh.ge`.  
-**Working name:** `fileserver` (branding configurable; no product name selected).
+**Product name:** lshare. Hosts can configure their workspace name and icon.
+
+The [Effect architecture addendum](EFFECT_SPEC.md) governs server-side composition, exceptions to the dependency policy, testing, and quality gates wherever it supersedes this document.
 
 ## 0. Instructions to Codex and architectural decisions
 
@@ -13,14 +15,16 @@ Build a polished private file-sharing service for friends. It should feel like a
 
 - One integrated Remix 3 full-stack application, one repository, one package, one Bun server process, one Docker image/container, one listening HTTP port. Browser-side JavaScript is part of the same application; there is no separate SPA project, API deployment, or second server.
 - TypeScript/TSX and native CSS. Remix native components, routing, controllers, data, auth, sessions, middleware, assets and validation. Do not use React, React Router, Remix v2 conventions, Next.js, Express, Vite, Tailwind, Drizzle, Better Auth or a third-party upload server.
-- Zero direct third-party application package dependencies outside the official Remix ecosystem. Use `remix` and, where warranted, independently pinned official `@remix-run/ui`. Bun provides the runtime, SQLite, hashing, streams, build/tooling and tests. Official packages can have transitive dependencies; zero dependencies does not mean an empty dependency tree. Do not introduce another npm package, native addon, executable or service without an explicit owner decision. Build-only first-party type definitions may be approved if Bun/Remix requires them; record any tooling exception.
+- The approved direct production dependencies are official Remix packages and Effect core. Bun provides the runtime, SQLite, hashing, streams and native tests. The architecture addendum defines approved development tooling. Additional dependencies, native addons, executables or services require an explicit owner decision.
 - Real filesystem is the source of truth. Existing folders can be mounted and browsed without importing files. Completed uploads must be ordinary named files in their intended folders, immediately accessible through the OS and other trusted applications. SQLite is for application metadata, not file bytes or a mandatory file catalog.
 - Native browser downloads, resumable uploads and downloads, predictable short root-level URLs, modern accessible UI and strong security are core functionality.
 - No passkeys or TOTP. Local username/password login is the initial authentication method. No public self-registration or external identity service by default.
 - Prefer documented Remix APIs first, Bun/native Web APIs second, narrow app-owned extensions third. Do not fork framework internals or implement cryptography yourself. No hidden dependencies or fallback stacks.
 - Linux containers are the supported production target. Test amd64 and arm64; do not assume Windows path semantics. The host administrator controls mount definitions and trusted external filesystem writers.
 
-**How to use this document:** Sections 1–10 are the product requirements; 11–17 define technical contracts, gates, and parallel execution. P0 = first usable release (all security gates mandatory); P1 = next iteration; P2 = optional later work. The priority split, suggested route names, defaults and data model are implementation proposals chosen to unblock parallel work, not additional owner-approved product requirements. Document departures in an ADR. Do not let independent agents alter shared interfaces or invent alternative stacks. Keep deferred features visible in the backlog rather than silently dropping them.
+**Current build scope.** Deliver P0, P1, and P2 in this build. The labels order work by dependency. P0 establishes the core file manager and transfer contracts, P1 extends the workflows, and P2 covers integrations and advanced format support. Where a capability depends on an unverified API, a safety gate, or an owner decision, evaluate it during this build and record the verified behavior, supported fallback, or specific blocker.
+
+Sections 1–10 define the product requirements. Sections 11–17 define contracts, gates, and execution. Suggested route names, defaults, and data models remain implementation proposals. Coordinate shared interfaces and document departures in an ADR. The [product brief](../PRODUCT.md) describes the users and the handoffs carried forward from the earlier app.
 
 ## 1. Filesystem and storage
 
@@ -56,7 +60,7 @@ Build a polished private file-sharing service for friends. It should feel like a
 **P1**
 
 - Configurable bandwidth limits, global and per-user concurrent transfer limits, transfer cancellation from administration, and measured rate reporting.
-- Folder/multi-selection download as streamed TAR (or TAR.GZ) with safe entry names, no following links, bounded resources. Optionally stage completed archives for resumable downloads with expiry and cleanup. On-the-fly streams do not promise arbitrary range resumption. ZIP/ZIP64 remains desired but see §11.5; do not load giant archives into RAM.
+- Folder/multi-selection download as streamed TAR (or TAR.GZ) with safe entry names, no following links, bounded resources. Optionally stage completed archives for resumable downloads with expiry and cleanup. On-the-fly streams do not promise arbitrary range resumption. The owner selected TAR and TAR.GZ for exports. ZIP and ZIP64 are outside the agreed format set. Stream large archives with bounded memory.
 
 ## 3. Uploads
 
@@ -91,7 +95,8 @@ Build a polished private file-sharing service for friends. It should feel like a
 
 **P1**
 
-- Upload-only directory shares (no ability to enumerate, read, overwrite existing files or disclose names; implement restricted upload principal and collision handling). If added to P0, all same security checks apply. Upload only is not equivalent to read/write.
+- Preserve the earlier upload-request flow. An owner selects a destination folder, optionally sets an expiry and aggregate byte cap, then copies one upload-only link. A recipient can submit files without listing, reading, overwriting, or learning the names of existing entries. Enforce the cap across concurrent and resumed uploads and recheck revocation before publishing a file.
+- Preserve the earlier selection workflow. Owners can keep a selection across folders and share it in one link. Recipients can download individual items or the authorized set as an archive. Authorize each selected entry and its included descendants, including when the owner’s access changes. Keep single-file aliases direct.
 - Optional download limits using defined transfer leases (§12.3), expiration, password grants, per-share bandwidth and aggregate statistics. Browser HTTP cannot perfectly identify human download actions across retries/parallel ranges; expose the lease semantics and never advertise exact completed-download counts.
 - Optional alias history, expiry notification in admin UI, and batch share management. No external notification dependency.
 
@@ -191,17 +196,19 @@ Build a polished private file-sharing service for friends. It should feel like a
 
 ### 11.1 Version and dependency policy
 
-- Proposed initial pins: `remix@3.3.0` (official docs show this version), Bun `1.4.5` (official release 2026-11-19, includes security fixes). Before implementation, verify actual registry availability, integrity, engine constraints, release/security notices, Linux base-image tags and resolved exports. If there is a newer security-fixed compatible patch, record an ADR and repin before the foundation merge. Commit `bun.lock`; never depend on `latest`, floating git refs or unpinned ranges in production. Pin the verified Docker image tag/digest and independently resolved `@remix-run/ui` version.
+- The implementation pins `remix@3.3.0`, `effect@4.1.7`, and Bun `1.4.5`. The repository includes `bun.lock` and the Linux base image digest. Check release and security notices, registry integrity, engine requirements, and resolved exports when updating a pin.
 - `@remix-run/ui` is official but currently explicitly unstable and versioned separately. Use only documented primitives, optionally wrap them locally for controlled upgrades. Use native semantic HTML when a primitive is absent; no imported React UI kits. Do not invent an exact UI version without registry verification.
 - Verify the official starter with Bun and retain official Remix agent skill (`.agents/skills/remix`, when included/available). Use `remix/component` JSX runtime, not React. Bun has native `bun check`, `bun fmt`, `bun lint`, `bun test` in the documented runtime generation; confirm command flags on pinned runtime. Pick `bun:test` as default; Remix Test is available but not mandatory. No redundant test/build runner. Use local Chrome/Firefox manual checks or Bun.WebView where supported; it is experimental and needs a browser installed on Linux, not a production dependency.
 - Dependency allowlist check: package.json direct deps only approved official packages; review dev deps too. Transitive dependencies of Remix are allowed and locked, not hand-waved away. No CDN scripts/fonts or runtime network dependency for normal UI. Run `bun install --frozen-lockfile`, dependency audit, and review all security findings.
 
-### 11.2 API mapping (official documentation verified; actual runtime tests pending)
+### 11.2 API mapping
+
+The table records the intended API choices. The [implementation evidence](implementation-status.md) records what has run on the pinned stack.
 
 | Need | Preferred documented API | What we own / must test |
 |---|---|---|
 | Full stack and routing | `remix/router`, `remix/routes`, `createRouter`, `router.fetch` | Route ordering, HEAD behavior, catch-all aliases, typed context |
-| HTTP runtime | `Bun.serve({ fetch })` | Origin normalization, peer address, abort, timeouts, body limits |
+| HTTP runtime | Bun `node:http` with `remix/node-fetch-server` | Origin normalization, peer address, abort, timeouts, body limits and content length on the wire |
 | UI | `remix/component`, `remix/component/server`, `remix/middleware/render` | SSR, hydration, native download bypass, UI state; closure pattern |
 | UI primitives | `@remix-run/ui/*` | Pin unstable official release; test behavior/accessibility |
 | Assets | `remix/assets`, `remix/middleware/static` | Production asset mapping and cache; static only for app-owned files |
@@ -246,7 +253,7 @@ This is the main architectural risk. Remix does not provide OS-level root confin
 ### 11.5 Dependency-free media/archive limits
 
 - Bun v1.4 provides native image operations. Official docs list JPEG/PNG/WebP and BMP/GIF decode on Linux; HEIC/AVIF may not be available there. Use `Bun.Image` with explicit `maxPixels` and input/output bounds; no format claims until tested in the actual image. Derivative caches can be rebuilt. Browser-native previews are format/codec dependent.
-- `Bun.Archive` is TAR/TAR.GZ oriented; not evidence of a streaming ZIP/ZIP64 writer or bounded large-file archive pipeline. Use a bounded streaming TAR writer implemented/tested in app code (with optional streaming gzip) for P1; use official `remix/tar-parser` for supported inspection. ZIP/ZIP64 is deferred until a verified native API exists or owner approves implementation/dependency. Do not invoke shell `tar`, `zip`, FFmpeg or install utilities silently. No archive extraction endpoint in P0.
+- Provide bounded streaming TAR export with optional streaming gzip. Use official Remix TAR parsing for supported inspection. The owner selected TAR and TAR.GZ as the export formats. Archive inspection reads metadata without extracting entries.
 - `Bun.markdown` does not automatically establish XSS safety. Render safe escaped text or a narrowly allowlisted AST/renderer only after tests; no raw HTML or arbitrary dangerous link URLs.
 
 ## 12. Shared implementation contracts
@@ -425,7 +432,7 @@ Branch/worktree naming suggestion `codex/<id>-<name>`. Each workstream has exclu
 | J | Transfer UI | transfer queue/client upload protocol, progress/retry/selection, native download actions, SSE client | G0/H; E/F HTTP contract mock |
 | K | Share UI | share editor/list, copy alias, direct/landing views, password unlock | G0/H; G route contract mock |
 | L | Admin UI/operations | admin views/controllers, user/group/root/ACL/share settings, audit and health | G0/H; B/C/D/G service contracts |
-| M | Previews/archives | safe media/text and bounded thumbnails; P1 TAR plan, cache | G0/G5; C/D/E contracts; no ZIP dependency |
+| M | Previews/archives | Safe previews, bounded thumbnails and cache, streaming TAR export, archive listing, and advanced format verification (§11.5) | G0/G5 and C/D/E contracts. Dependency exceptions require owner approval. |
 | N | Packaging/reliability | Dockerfile, compose, docs, backup/restore, shutdown/load tests, proxy config examples | G0; A startup contract, D/F recovery |
 | O | Independent QA/red team | adversarial HTTP, ACL matrix, race/crash tests, browser manual scenarios, load measurements; review all PRs | G0; integration endpoints as they land |
 
@@ -436,17 +443,18 @@ Workstreams B–O can work concurrently after G0 using frozen interfaces and exp
 1. Merge A and accepted spikes/contracts. CI green, dependency gate clean.
 2. Merge B/C/D after G1/G2; verify auth + filesystem integration before routes become exposed.
 3. Merge E/F and G with integration contract tests. Verify actual native HTTP transfers and alias resolver, concurrent permissions and state transitions.
-4. Merge H/I/J/K/L and P0 subset of M/N. Run actual browser flows against real HTTP server; replace mocks, do not release fixtures. Integrate P1 features only after P0 acceptance.
-5. O independently executes release suite, documents findings/known limitations. Coordinator reviews every exposed route, imports and dependency manifest. Owner accepts G2 deployment threat model. Only then consider public exposure. Tag release, backup and rollout instructions. Do not automatically deploy to the real domain or alter real storage.
+4. Merge H/I/J/K/L with the core of M/N. Run browser flows against the real HTTP server using isolated storage. Verify that a recipient can download an unchanged file after interruption.
+5. Integrate P1 and P2 work against the accepted core contracts. Exercise upload-only requests, selection shares, archive export, trash and restore, transfer controls, session and token management, previews, and integrations. Record the result for each conditional capability in §16.
+6. O independently executes the release suite and documents findings. The coordinator reviews every exposed route and the dependency manifest. The owner accepts the G2 deployment threat model before public exposure. Prepare the release tag, backup and rollout instructions. Do not automatically deploy to the real domain or alter real storage.
 
 ### Agent prompt template (copy into each Codex task)
 
 ```text
-Read SPEC.md, AGENTS.md, app/contracts/* and accepted docs/adr/*.
+Read docs/FILE_SERVER_BUILD_SPEC.md, PRODUCT.md, AGENTS.md, app/contracts/* and accepted docs/adr/*.
 You own workstream <ID> in §14. Work only in your assigned paths and tests.
-Use Remix 3.3.0 + pinned Bun 1.4.5 (or coordinator-approved security pin), native APIs and official Remix packages. No new dependency or separate app/process. Do not assume Remix v2/React APIs. Verify installed exports/types against official docs and record any gaps.
+Use Remix 3.3.0, Bun 1.4.5 and Effect 4.1.7, with official Remix APIs and the application-scoped Effect runtime. Coordinate dependency changes. Verify installed exports and types against the published APIs and record any gaps.
 Consume frozen contracts; if blocked, propose an interface change, do not silently change shared files. Use test-only mocks while waiting for other branches. No insecure production stubs. Never touch real user data, production domain or secrets.
-Implement P0 acceptance criteria relevant to this workstream, tests including failure/authorization paths, and concise docs/ADR if needed. Run bun check, bun test for your changes and any real HTTP/Linux tests available. Report exact commands/results, changed files, dependencies, assumptions, known failures and remaining P1/P2. Do not claim a gate passed unless actually executed.
+Implement the P0, P1, and P2 requirements owned by this workstream in dependency order. Test success, failure, and authorization paths for each enabled feature. Run bun check, bun test, and applicable HTTP/Linux tests. Report exact results, changed files, dependencies, and unresolved gates. Document evidence for each fallback or blocked capability.
 ```
 
 ## 15. Acceptance tests and release gate checklist
@@ -466,6 +474,10 @@ Use Bun test and real `Bun.serve` HTTP integration tests on a temporary port and
 | Upload protocol | OPTIONS/POST/HEAD/PATCH/DELETE, wrong offsets/version/content-type, missing auth/CSRF, huge/negative/overflow length, actual stream bound, 0-byte, duplicate requests, concurrent writes, retry/pause, folder path traversal, overwrite/rename/skip conflicts |
 | Upload crash/restart | Kill process during write, after sync/before DB offset, after offset, before/after publish, before completed DB commit; recover committed offset, no data loss/silent overwrite, reservations reclaimed, final digest matches input |
 | Shares | `/rd` returns correct bytes & original filename directly without redirect, unique/reserved alias conflicts, edit/revoke/expire, password rate limit and scoped grant, target revision changes invalidate, unauthorized descendants denied, directory share cannot escape, path replacement policy, no listing hidden shares |
+| Selection share | Select items across folders and send one link. Verify that the recipient can download an individual item and the authorized archive. Check that unselected siblings stay private and a permission change applies on the next request. |
+| Upload request | Create a folder-targeted link with expiry and a total-size cap. Upload from a signed-out browser, resume an interrupted transfer, and verify the completed file on disk. Check concurrent submissions against the cap, collision privacy, and revocation before completion. |
+| File management and administration | Restore a trashed file when its old name is occupied. Verify scoped search, transfer cancellation, quotas, device-session revocation, and token scope and expiry with separate user accounts. |
+| Integrations and formats | For each enabled provider, viewer, codec, or archive format, exercise the end-user flow on the supported deployment. Verify the documented fallback for unavailable formats and local login with an external identity provider disabled. |
 | Preview/XSS | HTML/SVG/JS attachments, malicious filename/metadata safely escaped, MIME spoofing, CSP asset/hydration works without weakening, thumbnails ACL/cache, max pixel/size/decode limits, text cap, no raw Markdown HTML |
 | UI | Accessible keyboard/touch flows, responsiveness, list/grid, context menu, selection, drag/drop fallback, upload queue persists during internal navigation, native download not hijacked, share creation copy, errors/empty states, no secret serialized |
 | Reliability | Graceful shutdown + resume, SQLite backup/restore and migration, concurrency/short transactions, audit redaction, mount failure handling, SSE permissions/heartbeat/disconnect, no unsafe dev routes |
@@ -481,14 +493,16 @@ curl -sS -D - -o /dev/null -H 'Range: bytes=999999999999999-' http://127.0.0.1:8
 # Record ETag from HEAD and replay If-Range with same/mismatching values; compare actual bytes.
 ```
 
-**Definition of done:** every enabled P0 feature has integration tests; G0–G4 passed, G5 mandatory parts passed; no critical/high known unfixed security vulnerabilities without owner-reviewed remediation; direct dependency allowlist passes; threat model and unsupported formats/filesystems clearly documented; no data-corrupting failure on crash suite; tested backup/restore; actual native browser download and resume, original upload file path, and custom alias are demonstrated. Document P1/P2 backlog with status. Do not report a production-ready server solely because code compiles.
+**Definition of done.** Account for each P0, P1, and P2 requirement. Every enabled feature has passing integration coverage. A conditional capability has either verified support, a tested fallback allowed by the spec, or a documented blocker requiring owner resolution. An unresolved mandatory gate blocks release.
 
-## 16. Deferred / owner decisions
+G0–G4 and the mandatory parts of G5 pass. The direct dependency allowlist passes. Critical or high security findings require remediation or owner-reviewed disposition. Document the supported threat model, formats, and filesystems. Demonstrate recovery without corruption, backup and restore, native browser download and resume, upload to the original destination path, and direct custom aliases.
 
-- Project name, visual identity, exact admin default limits and retention. Initial priorities and route namespace can be changed at G0 before freeze.
+## 16. Capability checks and open owner decisions
+
+- Exact admin default limits and retention. Initial priorities and route namespace can be changed at G0 before freeze.
 - Whether to support hostile external writers beyond the trusted-host/SMB/NFS contract. If yes, a stronger OS confinement design or native helper may be necessary; never weaken security to maintain zero dependencies.
 - Exact stable-file/resume policy for externally in-place modified files (trusted publish-by-rename is recommended). Snapshot mode optional and off by default.
-- ZIP/ZIP64 export, advanced PDF/Markdown safety, video thumbnails/transcoding, unsupported Linux image codecs, OIDC, WebDAV, quotas for external writers, optional search index. Keep these scoped until native APIs and security are verified; no hidden dependency additions. No passkeys/TOTP by explicit owner decision.
+- The owner selected TAR and TAR.GZ exports. Other capability checks cover advanced PDF/Markdown safety, video thumbnails/transcoding, unsupported Linux image codecs, OIDC, WebDAV, quotas for external writers and an optional search index. Keep these scoped until native APIs and security are verified; no hidden dependency additions. No passkeys/TOTP by explicit owner decision.
 - Browser support matrix beyond recent Chrome/Firefox; test Safari/mobile where feasible. Native resume depends on browser, validators and server/proxy configuration.
 
 ## 17. Verification references and limitations
